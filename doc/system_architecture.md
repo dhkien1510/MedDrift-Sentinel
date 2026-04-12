@@ -1,7 +1,7 @@
 
 # System Architecture (Kiến trúc Hệ thống)
 
-Hệ thống MedDrift-Sentinel vận hành theo mô hình **Microservices 4-Tier**, giao tiếp qua REST API và WebSocket, được triển khai bằng Docker Compose.
+Hệ thống MedDrift-Sentinel vận hành theo mô hình **Microservices 4-Tier**, giao tiếp qua chuẩn REST API. Toàn bộ hệ thống được container hóa chuyên nghiệp bằng **Docker Compose** để dễ dàng triển khai (deploy) linh hoạt từ môi trường Local cho đến Cloud.
 
 ## 1. Mô tả các Tier
 
@@ -11,16 +11,16 @@ Giao diện web hiện đại, cho phép bác sĩ:
 - Đặt câu hỏi y khoa (Medical VQA).
 - Xem kết quả trả lời kèm cảnh báo Drift bằng các biểu đồ trực quan.
 - Xem lịch sử hỏi đáp trước đó.
-- Nhận kết quả **real-time** qua WebSocket (streaming answer từ LLaVA-Med).
+- Nhận kết quả chẩn đoán VQA kèm báo cáo Drift chi tiết qua HTTP Response tĩnh.
 
 ### 1.2 Business Logic Tier (Node.js / Express) — Orchestrator
 Đóng vai trò **trung tâm điều phối** (Orchestrator), chịu trách nhiệm:
-- **Authentication & Authorization**: Xác thực người dùng (JWT), phân quyền truy cập theo vai trò (bác sĩ, admin).
+- **Authentication & Authorization (Dự kiến)**: Tích hợp xác thực người dùng (JWT), phân quyền truy cập theo vai trò (bác sĩ, admin). Hiện tại MVP tập trung vào luồng xử lý AI.
 - **Request Validation**: Kiểm tra định dạng ảnh, kích thước file, nội dung câu hỏi trước khi forward sang AI Service.
 - **Caching Layer**: Sử dụng Redis để cache kết quả VQA (cùng ảnh + cùng câu hỏi → trả cache, giảm chi phí gọi API LLaVA-Med). TTL cache: 24 giờ.
 - **Orchestration**: Gọi **song song** (Promise.all) hai endpoint của Python AI Service (Drift Check + Inference) và aggregate kết quả.
 - **Logging & Audit Trail**: Ghi log mọi request/response (structured JSON logs) phục vụ truy vết và audit.
-- **WebSocket Gateway**: Duy trì kết nối WebSocket với React để streaming kết quả real-time (vì inference LLaVA-Med có thể mất 5–15s).
+- **REST API Flow**: Điều phối luồng request HTTP từ React. Quản trị timeout khắt khe (vì inference của LLaVA-Med lên Cloud có thể kéo dài 5–15s).
 - **Rate Limiting**: Giới hạn số request/phút để tránh lạm dụng API.
 
 ### 1.3 AI Tier (Python / FastAPI)
@@ -33,7 +33,7 @@ Chỉ tập trung vào các tác vụ AI nặng, bao gồm hai service con:
 
 ### 1.4 Storage Tier
 - **MongoDB**: Lưu trữ lịch sử hỏi đáp, kết quả drift detection, thông tin user, audit logs.
-- **MinIO** (hoặc Local Folder): Lưu ảnh y tế đã upload, có mã hóa at-rest (AES-256).
+- **Amazon S3 / MinIO**: Kho Object Storage theo tiêu chuẩn doanh nghiệp để lưu ảnh X-quang khối lượng lớn, có mã hóa at-rest (AES-256).
 - **Redis**: Cache kết quả VQA để giảm latency và chi phí API external.
 
 ---
@@ -85,10 +85,72 @@ meddrift-vqa-root/
 
 ## 3. DATA FLOW
 
+### Enterprise MLOps Architecture Diagram
+
+```mermaid
+graph TD
+    classDef client fill:#e1f5fe,stroke:#0288d1,stroke-width:2px,color:#000;
+    classDef gateway fill:#fff3e0,stroke:#f57c00,stroke-width:2px,color:#000;
+    classDef db fill:#e8f5e9,stroke:#388e3c,stroke-width:2px,color:#000;
+    classDef ai fill:#fce4ec,stroke:#c2185b,stroke-width:2px,color:#000;
+    classDef cloud fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px,color:#000;
+
+    subgraph Client ["Client Tier"]
+        UI(["React.js / Web UI"]):::client
+    end
+
+    subgraph Gateway ["Business Logic Tier"]
+        NodeAPI{"Node.js API Gateway"}:::gateway
+    end
+
+    subgraph Storage ["Storage Tier (Local/AWS)"]
+        Redis[("Redis Cache")]:::db
+        Mongo[("MongoDB")]:::db
+        MinIO[("Amazon S3 / MinIO")]:::db
+    end
+
+    subgraph AI_Sentinel ["MedDrift-Sentinel AI Tier (Local On-Premise)"]
+        Router{"Router / Controller"}:::ai
+        ImageDrift["CLIP + MMD (Image Guard)"]:::ai
+        TextDrift["BioBERT + MMD (Text Guard)"]:::ai
+        LLavaGateway["LLaVA API Broker"]:::ai
+        Alert(("Drift Alert!")):::ai
+    end
+
+    subgraph External ["Cloud Inference Tier"]
+        LLaVA["Large Vision-Language Model"]:::cloud
+    end
+
+    UI -->|"1. Input (Image + Text)"| NodeAPI
+    NodeAPI -->|"2. Check Cache"| Redis
+    Redis -.->|"Hit: Skip AI"| NodeAPI
+    NodeAPI -->|"3. Save Data"| MinIO
+    
+    NodeAPI -->|"4. Miss: Forward"| Router
+    Router -->|"5a. Analyze"| ImageDrift
+    Router -->|"5b. Analyze"| TextDrift
+    
+    ImageDrift -.->|"6. Safe"| LLavaGateway
+    TextDrift -.->|"6. Safe"| LLavaGateway
+    
+    ImageDrift -.->|"Drift Detected!"| Alert
+    TextDrift -.->|"Drift Detected!"| Alert
+    Alert -.->|"Metadata Warning"| Router
+    
+    LLavaGateway ==>|"7. VQA Inference"| LLaVA
+    LLaVA ==>|"8. Generated Text"| LLavaGateway
+    
+    LLavaGateway -->|"9. Return Results"| Router
+    Router --> NodeAPI
+    
+    NodeAPI -->|"Save History"| Mongo
+    NodeAPI -->|"10. HTTP JSON Response"| UI
+```
+
 ### 3.1 Main Flow (Happy Path)
 
 1. **React → Node.js**: Bác sĩ upload Image + Question qua REST API (`POST /api/vqa`).
-2. **Node.js (Validation)**: Kiểm tra JWT token, validate định dạng ảnh (DICOM/PNG/JPG, ≤10MB), kiểm tra câu hỏi không rỗng.
+2. **Node.js (Validation)**: Validate định dạng ảnh (DICOM/PNG/JPG, ≤10MB) và kiểm tra câu hỏi không rỗng. (Flow check JWT được đưa vào mục dự kiến).
 3. **Node.js (Cache Check)**: Hash(image + question) → kiểm tra Redis cache.
    - **Cache Hit**: Trả kết quả ngay, skip bước 4–6.
    - **Cache Miss**: Tiếp tục bước 4.
@@ -112,7 +174,7 @@ meddrift-vqa-root/
    }
    ```
 8. **Node.js (Post-process)**: Lưu kết quả vào MongoDB, cache vào Redis (TTL 24h).
-9. **Node.js → React (WebSocket)**: Streaming kết quả real-time. Nếu `is_drifted: true`, React hiển thị cảnh báo đỏ và Agent gợi ý bác sĩ tra cứu thêm trên PubMed.
+9. **Node.js → React (HTTP Response)**: Trả về gói dữ liệu JSON hoàn chỉnh cho client. Nếu `is_drifted: true`, React hiển thị cảnh báo đỏ và Agent gợi ý bác sĩ tra cứu thêm trên PubMed.
 
 ### 3.2 Error Handling & Fallback
 
@@ -174,7 +236,7 @@ Medical Questions → BioBERT tokenize → CLS embedding (768-dim) → ref_quest
 |-----------|----------|
 | **Mã hóa at-rest** | Ảnh lưu trong MinIO được mã hóa AES-256. |
 | **Mã hóa in-transit** | Mọi API call giữa các service sử dụng HTTPS/TLS. |
-| **Access Control** | JWT-based authentication. Bác sĩ chỉ xem được lịch sử của chính mình. Admin có quyền xem audit log. |
+| **Access Control** | **(Dự kiến)** JWT-based authentication. Phân quyền hiển thị lịch sử khám theo session bác sĩ. |
 | **Audit Trail** | Mọi thao tác (upload, query, view history) được ghi log với timestamp, user_id, action. |
 | **Data Retention** | Ảnh y tế được xóa tự động sau 30 ngày (configurable). Lịch sử text giữ lại 90 ngày. |
 | **Anonymization** | Metadata DICOM (tên bệnh nhân, ngày sinh) được strip trước khi lưu trữ. |
