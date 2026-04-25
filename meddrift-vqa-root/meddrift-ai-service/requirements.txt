@@ -1,0 +1,22 @@
+# === Web Framework ===
+fastapi                    
+uvicorn                   
+python-multipart           
+
+# === AI / ML — Embedding Extraction ===
+torch --index-url https://download.pytorch.org/whl/cpu   
+transformers               
+Pillow                     
+
+# === Drift Detection ===
+alibi-detect             
+numpy                     
+
+# === LangChain — Agent Framework ===
+langchain                  
+langchain-core             
+langchain-google-genai     
+
+# === Config & Utilities ===
+pyyaml                     
+python-dotenv             

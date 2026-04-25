@@ -1,0 +1,14 @@
+image:
+  encoder: 'clip-vit-b32'
+  algorithm: 'mmd'
+  p_threshold: 0.05
+
+text:
+  encoder: 'biobert'
+  algorithm: 'mmd'
+  p_threshold: 0.05
+
+reference:
+  image_path: "../data/reference_data/ref_images.npy"
+  text_path: "../data/reference_data/ref_questions.npy"
+  num_samples: 500
