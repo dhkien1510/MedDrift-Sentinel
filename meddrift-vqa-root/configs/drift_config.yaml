@@ -1,14 +1,41 @@
 image:
-  encoder: 'clip-vit-b32'
-  algorithm: 'mmd'
+  encoder: 'openai/clip-vit-base-patch32'
+  algorithm: 'kolmogorov-smirnov'
+  allow_method: [
+    'kolmogorov-smirnov',
+    'cramer-von-mises',
+    'mmd',
+    'learned-kernel-mmd',
+    'context-aware-mmd',
+    'least-square-density-difference',
+    'classifier-uncertainty',
+    'spot-the-diff',
+    'regressor-uncertainty'
+  ]
   p_threshold: 0.05
 
 text:
-  encoder: 'biobert'
-  algorithm: 'mmd'
+  encoder: 'dmis-lab/biobert-v1.1'
+  algorithm: 'kolmogorov-smirnov'
+  allow_method: [
+    'kolmogorov-smirnov',
+    'mmd',
+    'learned-kernel-mmd',
+    'context-aware-mmd',
+    'least-square-density-difference',
+    'classifier-uncertainty',
+    'spot-the-diff',
+    'regressor-uncertainty'
+  ] 
+
   p_threshold: 0.05
 
 reference:
-  image_path: "../data/reference_data/ref_images.npy"
-  text_path: "../data/reference_data/ref_questions.npy"
+  data_dir: "data/reference_data"
+  image_file: "ref_images.npy"
+  text_file: "ref_questions.npy"
+  data: 'flaviagiammarino/vqa-rad'
   num_samples: 500
+
+buffer:
+  threshold: 100    # Số samples cần tích lũy trước khi chạy drift detection

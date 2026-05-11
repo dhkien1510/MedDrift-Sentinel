@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  frontend:
+    build: ./meddrift-frontend
+    ports:
+      - "3000:3000"
+    stdin_open: true # Giữ cho React không bị tắt ngay lập tức trong một số môi trường
+    environment:
+      - CHOKIDAR_USEPOLLING=true # Giúp hot-reload hoạt động tốt trong Docker
+
+  service:
+    build: ./meddrift-ai-service
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./meddrift-ai-service:/app # Map code để thay đổi code không cần build lại
+      - ./hf_cache:/root/.cache/huggingface
+  backend:
+    build: ./meddrift-server
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./meddrift-server:/app

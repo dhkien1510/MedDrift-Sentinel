@@ -10,12 +10,15 @@ Pillow
 
 # === Drift Detection ===
 alibi-detect             
-numpy                     
+numpy            
+datasets         
 
 # === LangChain — Agent Framework ===
 langchain                  
 langchain-core             
 langchain-google-genai     
+langchain-openrouter       
+langgraph                  
 
 # === Config & Utilities ===
 pyyaml                     

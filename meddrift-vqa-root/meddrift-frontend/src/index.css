@@ -1,0 +1,8 @@
+@import "tailwindcss";
+
+/* Bạn vẫn có thể giữ lại các tùy chỉnh CSS bên dưới */
+body {
+  background-color: #f9f8f6;
+  margin: 0;
+  padding: 0;
+}
