@@ -1,22 +1,48 @@
-# Python
+# --- Python (AI Service) ---
 __pycache__/
 *.pyc
 venv/
-.env
+.pytest_cache/
+.ipynb_checkpoints/
+*.pth
+*.bin
 
-# NodeJS
+# --- NodeJS (Server & Frontend) ---
 node_modules/
+/meddrift-frontend/dist/
+/meddrift-frontend/build/
+npm-debug.log*
 
-# Data
+# --- Environment & Data ---
+.env
+.env.*.local
 *.npy
 data/reference_data/*.npy
+# Ignore các folder chứa dataset lớn nếu có
+/data/datasets/
 
-
-# IDE
+# --- IDE & OS ---
 .vscode/
 .idea/
-
-# OS
 .DS_Store
 Thumbs.db
+*.swp
 
+# --- Logs ---
+logs/
+*.log
+
+# Checkpoints của Jupyter
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/
+
+# Các file log sinh ra khi chạy service
+*.log
+meddrift-server/logs/
+
+# Folder build của frontend (nếu lỡ tay build local)
+meddrift-frontend/dist/
+
+# File tạm của hệ thống
+.DS_Store
+Thumbs.db
