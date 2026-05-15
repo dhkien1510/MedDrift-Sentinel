@@ -1,18 +1,88 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { Settings, Save, RefreshCw, Layers, Cpu, Activity } from 'lucide-react';
+import { Settings, Save, RefreshCw, Layers, Cpu, Activity, ShieldCheck, AlertCircle } from 'lucide-react';
+import GovLayout from '../shared/GoVLayout';
+import { C, S } from '../shared/theme';
+
+const styles = {
+    formGroup: {
+        marginBottom: '20px',
+    },
+    label: {
+        display: 'block',
+        fontSize: '11px',
+        fontWeight: 700,
+        color: C.textMuted,
+        textTransform: 'uppercase',
+        letterSpacing: '0.05em',
+        marginBottom: '6px',
+        fontFamily: 'Arial, sans-serif',
+    },
+    select: {
+        width: '100%',
+        padding: '10px 12px',
+        fontSize: '13px',
+        border: `1px solid ${C.borderLight}`,
+        borderRadius: '4px',
+        backgroundColor: '#F8FAFC',
+        outline: 'none',
+        fontFamily: 'Arial, sans-serif',
+        color: C.navyDark,
+    },
+    saveButton: {
+        backgroundColor: C.navy,
+        color: C.white,
+        padding: '10px 24px',
+        fontSize: '12px',
+        fontWeight: 700,
+        textTransform: 'uppercase',
+        letterSpacing: '0.1em',
+        border: 'none',
+        borderRadius: '4px',
+        cursor: 'pointer',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '8px',
+        transition: 'background 0.2s',
+    }
+};
+
+const ENCODER_LABELS = {
+    "dmis-lab/biobert-v1.1":                                          "BioBERT v1.1",
+    "microsoft/BiomedNLP-BiomedBERT-base-uncased-abstract":           "BiomedBERT (Abstract)",
+    "microsoft/BiomedNLP-BiomedBERT-base-uncased-abstract-fulltext":  "BiomedBERT (Fulltext)",
+    "NeuML/pubmedbert-base-embeddings":                               "PubMedBERT Embeddings",
+    "NeuML/pubmedbert-base-embeddings-matryoshka":                    "PubMedBERT Matryoshka",
+    "NeuML/pubmedbert-base-embeddings-8M":                            "PubMedBERT 8M (Static)",
+    "pritamdeka/S-PubMedBert-MS-MARCO":                               "S-PubMedBERT MS-MARCO",
+    "openai/clip-vit-base-patch32":                                   "CLIP ViT-B/32",
+    "microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224":      "BiomedCLIP ViT-B/16",
+    "microsoft/rad-dino":                                             "RAD-DINO",
+    "microsoft/rad-dino-maira-2":                                     "RAD-DINO MAIRA-2",
+    "facebook/dinov2-base":                                           "DINOv2 Base",
+    "google/vit-base-patch16-224":                                    "ViT-B/16 (ImageNet)",
+};
+
+const formatEncoderLabel = (enc) => ENCODER_LABELS[enc] ?? enc;
 
 const ConfigPage = () => {
     const [loading, setLoading] = useState(true);
     const [options, setOptions] = useState({ algorithms: [], encoders: [] });
     const [config, setConfig] = useState({
+        buffer_threshold: 100,
+
         image_encoder: '',
+        image_algorithm: '',
+        image_p_threshold: 0.05,
+        image_encoders: [],
+
+
         text_encoder: '',
-        drift_algorithm: '',
-        p_value_threshold: 0.05
+        text_algorithm: '',
+        text_p_threshold: 0.05,
+        text_encoders: [],
     });
 
-    // 1. Load danh sách tùy chọn và cấu hình hiện tại
     useEffect(() => {
         const fetchData = async () => {
             try {
@@ -20,138 +90,213 @@ const ConfigPage = () => {
                     axios.get('/api/drift/algorithms'),
                     axios.get('/api/drift/config')
                 ]);
-
-                setOptions(prev => ({ ...prev, algorithms: algoRes.data.algorithms }));
+                setOptions({
+                    image_algorithms: algoRes.data.image_algorithms || [],  // ✅
+                    text_algorithms: algoRes.data.text_algorithms || [],     // ✅
+                    image_encoders: algoRes.data.image_encoders || [],  // thêm
+                    text_encoders: algoRes.data.text_encoders || [],  // thêm
+                });
                 setConfig(configRes.data);
-                setLoading(false);
             } catch (err) {
-                console.error("Lỗi tải cấu hình:", err);
+                console.error("Lỗi nạp cấu hình:", err);
+            } finally {
+                setLoading(false);
             }
         };
         fetchData();
     }, []);
 
-    // 2. Xử lý lưu cấu hình mới
     const handleSave = async () => {
         try {
             setLoading(true);
             await axios.post('/api/drift/config/apply', config);
-            alert("Cấu hình đã được áp dụng thành công!");
+            alert("Hệ thống: Cấu hình tham số đã được áp dụng thành công.");
         } catch (err) {
-            alert("Lỗi khi áp dụng cấu hình.");
+            alert("Lỗi: Không thể kết nối với AI Service để cập nhật.");
         } finally {
             setLoading(false);
         }
     };
 
-    if (loading) return <div className="p-10 text-center">Đang tải cấu hình...</div>;
+    if (loading && !config.image_encoder) {
+        return (
+            <GovLayout>
+                <div className="flex flex-col items-center justify-center h-64">
+                    <RefreshCw className="animate-spin text-[#0055a4] mb-4" size={32} />
+                    <p className="text-sm font-bold text-gray-400 uppercase tracking-widest">Đang kết nối Registry...</p>
+                </div>
+            </GovLayout>
+        );
+    }
 
     return (
-        <div className="min-h-screen bg-[#f9f8f6] p-8">
-            <div className="max-w-4xl mx-auto">
-                <header className="mb-8 flex justify-between items-center">
+        <GovLayout>
+            <div className="max-w-5xl mx-auto space-y-6">
+                {/* Header: Phong cách hành chính chuyên nghiệp */}
+                <header className="flex justify-between items-end border-b-2 border-gray-100 pb-4">
                     <div>
-                        <h1 className="text-2xl font-semibold text-orange-900 flex items-center gap-2">
-                            <Settings size={24} /> Cấu hình Sentinel
-                        </h1>
-                        <p className="text-sm text-gray-500 mt-1">Quản lý Model Registry và Thuật toán Drift</p>
+                        <div className="flex items-center gap-2 text-[#0055a4] mb-1">
+                            <Settings size={20} />
+                            <h1 className="text-xl font-black uppercase tracking-tight">Thiết lập tham số hệ thống</h1>
+                        </div>
+
                     </div>
                     <button
                         onClick={handleSave}
-                        className="flex items-center gap-2 bg-orange-800 text-white px-6 py-2 rounded-xl hover:bg-orange-900 transition shadow-sm"
+                        style={styles.saveButton}
+                        className="hover:bg-[#004485] active:scale-95 transition-all shadow-sm"
                     >
-                        <Save size={18} /> Lưu & Áp dụng
+                        <Save size={16} /> Lưu & Áp dụng thay đổi
                     </button>
                 </header>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-
-                    {/* Cấu hình Image Pipeline */}
-                    <section className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm">
-                        <h2 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
-                            <Layers size={16} /> Image Pipeline
-                        </h2>
-                        <div className="space-y-4">
-                            <div>
-                                <label className="block text-xs font-medium text-gray-700 mb-1">Image Encoder (Feature Extractor)</label>
+                    {/* Panel: Image Pipeline */}
+                    <div style={S.panel}>
+                        <div style={S.panelHeader}>
+                            <div style={S.panelTitle}>Trích xuất đặc trưng hình ảnh (Image)</div>
+                        </div>
+                        <div className="p-6">
+                            <div style={styles.formGroup}>
+                                <label style={styles.label}>Image Encoder</label>
                                 <select
-                                    className="w-full bg-gray-50 border border-gray-200 rounded-lg p-2 text-sm outline-none focus:ring-2 focus:ring-orange-200"
+                                    style={styles.select}
                                     value={config.image_encoder}
                                     onChange={(e) => setConfig({ ...config, image_encoder: e.target.value })}
                                 >
-                                    <option value="clip-vit-b32">CLIP ViT-B/32 (General)</option>
-                                    <option value="biomedclip">BiomedCLIP (Medical Special)</option>
+                                    {options.image_encoders.map(enc => (
+                                        <option key={enc} value={enc}>
+                                            {formatEncoderLabel(enc)}
+                                        </option>
+                                    ))}
                                 </select>
                             </div>
                         </div>
-                    </section>
+                    </div>
 
-                    {/* Cấu hình Text Pipeline */}
-                    <section className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm">
-                        <h2 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
-                            <Cpu size={16} /> Text Pipeline
-                        </h2>
-                        <div className="space-y-4">
-                            <div>
-                                <label className="block text-xs font-medium text-gray-700 mb-1">Text Encoder (LLM/BERT)</label>
+                    {/* Panel: Text Pipeline */}
+                    <div style={S.panel}>
+                        <div style={S.panelHeader}>
+                            <div style={S.panelTitle}>Trích xuất đặc trưng văn bản (Text)</div>
+                        </div>
+                        <div className="p-6">
+                            <div style={styles.formGroup}>
+                                <label style={styles.label}>Text Encoder (Domain Specific BERT)</label>
                                 <select
-                                    className="w-full bg-gray-50 border border-gray-200 rounded-lg p-2 text-sm outline-none focus:ring-2 focus:ring-orange-200"
+                                    style={styles.select}
                                     value={config.text_encoder}
                                     onChange={(e) => setConfig({ ...config, text_encoder: e.target.value })}
                                 >
-                                    <option value="biobert">BioBERT (Y sinh)</option>
-                                    <option value="pubmedbert">PubMedBERT</option>
+                                    {options.text_encoders.map(enc => (
+                                        <option key={enc} value={enc}>
+                                            {formatEncoderLabel(enc)}
+                                        </option>
+                                    ))}
                                 </select>
                             </div>
                         </div>
-                    </section>
+                    </div>
 
-                    {/* Cấu hình Drift Algorithm */}
-                    <section className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm md:col-span-2">
-                        <h2 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
-                            <Activity size={16} /> Drift Detection Settings
-                        </h2>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                            <div>
-                                <label className="block text-xs font-medium text-gray-700 mb-1">Thuật toán giám sát</label>
+                    {/* Panel: Drift Detection */}
+                    <div style={{ ...S.panel, gridColumn: 'span 2' }}>
+                        <div style={S.panelHeader}>
+                            <div style={S.panelTitle}>Cấu hình giám sát sai lệch</div>
+                        </div>
+                        <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-6">
+
+                            {/* Image Algorithm */}
+                            <div style={styles.formGroup}>
+                                <label style={styles.label}>Thuật toán - Image pipeline</label>
                                 <select
-                                    className="w-full bg-gray-50 border border-gray-200 rounded-lg p-2 text-sm outline-none focus:ring-2 focus:ring-orange-200"
-                                    value={config.drift_algorithm}
-                                    onChange={(e) => setConfig({ ...config, drift_algorithm: e.target.value })}
+                                    style={styles.select}
+                                    value={config.image_algorithm}
+                                    onChange={(e) => setConfig({ ...config, image_algorithm: e.target.value })}
                                 >
-                                    {/* Thêm dấu ? sau algorithms */}
-                                    {options.algorithms?.map(algo => (
+                                    {options.image_algorithms?.map(algo => (
                                         <option key={algo} value={algo}>{algo.toUpperCase()}</option>
                                     ))}
                                 </select>
-                                <p className="text-[10px] text-gray-400 mt-2 italic">MMD phù hợp cho dữ liệu đa chiều (embeddings).</p>
-                            </div>
-                            <div>
-                                <label className="block text-xs font-medium text-gray-700 mb-1">P-value Threshold: {config.p_value_threshold}</label>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '16px', marginBottom: '6px' }}>
+                                    <label style={styles.label}>P-Value threshold</label>
+                                    <span className="text-lg font-black text-[#0055a4]">{config.image_p_threshold}</span>
+                                </div>
                                 <input
                                     type="range" min="0.01" max="0.20" step="0.01"
-                                    className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-orange-800"
-                                    value={config.p_value_threshold}
-                                    onChange={(e) => setConfig({ ...config, p_value_threshold: parseFloat(e.target.value) })}
+                                    className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-[#0055a4]"
+                                    value={config.image_p_threshold}
+                                    onChange={(e) => setConfig({ ...config, image_p_threshold: parseFloat(e.target.value) })}
                                 />
-                                <div className="flex justify-between text-[10px] text-gray-400 mt-1">
-                                    <span>Khắt khe (0.01)</span>
+                                <div className="flex justify-between text-[9px] font-bold text-gray-400 mt-2 uppercase tracking-tighter">
+                                    <span className="text-[#ed1c24]">Khắt khe (0.01)</span>
+                                    <span>Trung bình</span>
+                                    <span>Lỏng lẻo (0.20)</span>
+                                </div>
+
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '16px', marginBottom: '6px' }}>
+                                    <label style={styles.label}>Kích thước bộ đệm (Buffer Threshold)</label>
+                                    <span className="text-lg font-black text-[#0055a4]">{config.buffer_threshold}</span>
+                                </div>
+                                <input
+                                    type="range" min="10" max="500" step="10"
+                                    className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-[#0055a4]"
+                                    value={config.buffer_threshold}
+                                    onChange={(e) => setConfig({ ...config, buffer_threshold: parseInt(e.target.value) })}
+                                />
+                                <div className="flex justify-between text-[9px] font-bold text-gray-400 mt-2 uppercase tracking-tighter">
+                                    <span className="text-[#ed1c24]">Nhạy (10)</span>
+                                    <span>Trung bình</span>
+                                    <span>Chậm (500)</span>
+                                </div>
+                            </div>
+
+                            {/* Text Algorithm */}
+                            <div style={styles.formGroup}>
+                                <label style={styles.label}>Thuật toán - Text pipeline</label>
+                                <select
+                                    style={styles.select}
+                                    value={config.text_algorithm}
+                                    onChange={(e) => setConfig({ ...config, text_algorithm: e.target.value })}
+                                >
+                                    {options.text_algorithms?.map(algo => (
+                                        <option key={algo} value={algo}>{algo.toUpperCase()}</option>
+                                    ))}
+                                </select>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '16px', marginBottom: '6px' }}>
+                                    <label style={styles.label}>P-Value threshold</label>
+                                    <span className="text-lg font-black text-[#0055a4]">{config.text_p_threshold}</span>
+                                </div>
+                                <input
+                                    type="range" min="0.01" max="0.20" step="0.01"
+                                    className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-[#0055a4]"
+                                    value={config.text_p_threshold}
+                                    onChange={(e) => setConfig({ ...config, text_p_threshold: parseFloat(e.target.value) })}
+                                />
+                                <div className="flex justify-between text-[9px] font-bold text-gray-400 mt-2 uppercase tracking-tighter">
+                                    <span className="text-[#ed1c24]">Khắt khe (0.01)</span>
+                                    <span>Trung bình</span>
                                     <span>Lỏng lẻo (0.20)</span>
                                 </div>
                             </div>
+
                         </div>
-                    </section>
+                    </div>
                 </div>
 
-                <footer className="mt-8 p-4 bg-orange-50 rounded-xl border border-orange-100 flex items-start gap-3">
-                    <RefreshCw size={18} className="text-orange-800 mt-1" />
-                    <div className="text-xs text-orange-900 leading-relaxed">
-                        <p className="font-bold">Lưu ý về Software Engineering:</p>
-                        Việc áp dụng cấu hình mới sẽ thay đổi cách trích xuất feature từ ảnh/câu hỏi trong buffer tiếp theo. Dữ liệu cũ trong buffer sẽ được flush để đảm bảo tính nhất quán.
+                {/* Thông báo kỹ thuật (Technical Notice) */}
+                <footer className="bg-[#FFF8E1] border border-[#FFE082] p-4 flex gap-4 items-start shadow-sm">
+                    <div className="bg-white p-2 rounded-lg text-[#ed1c24]">
+                        <AlertCircle size={20} />
+                    </div>
+                    <div>
+                        <h4 className="text-xs font-bold text-amber-900 uppercase mb-1 tracking-wider">Thông báo vận hành hệ thống</h4>
+                        <p className="text-[11px] text-amber-800 leading-relaxed font-medium">
+                            Việc thay đổi cấu hình Model Encoder sẽ kích hoạt quy trình tái cấu trúc Feature Space.
+                            Toàn bộ dữ liệu đang chờ trong <strong>Bộ đệm (Buffer)</strong> sẽ bị hủy bỏ (Flush) để đảm bảo tính nhất quán của phép thử thống kê tiếp theo.
+                        </p>
                     </div>
                 </footer>
             </div>
-        </div>
+        </GovLayout>
     );
 };
 

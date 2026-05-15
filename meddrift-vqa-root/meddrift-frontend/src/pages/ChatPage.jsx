@@ -9,47 +9,108 @@ import {
     AlertCircle,
     CheckCircle2,
     ArrowUp,
-    X
+    X,
+    MessageSquare,
+    ShieldCheck,
+    Clock
 } from 'lucide-react';
+import GovLayout from '../shared/GoVLayout';
+import { C, S } from '../shared/theme';
+import Markdown from 'react-markdown';
+
+/** Build assistant message from live multimodal summary + buffer status (API: /api/drift/collect). */
+function formatMultimodalAssistantReply(data) {
+    const mm = data.multimodal;
+    const parts = [];
+    if (mm == null) {
+        parts.push('Không nhận được khối `multimodal` từ máy chủ.');
+    } else if (!mm.enabled) {
+        parts.push('**Đa phương thức (PCA + ghép vector):** đang tắt trong `drift_config.yaml` (`multimodal.enabled: false`).');
+    } else if (!mm.ready) {
+        parts.push(`**Đa phương thức:** chưa sẵn sàng — ${mm.message || 'Thiếu PCA / tham chiếu.'}`);
+    } else {
+        parts.push('**Đa phương thức (chiếu thực từ PCA đã huấn luyện trên tham chiếu + ghép vector)**');
+        parts.push(`- Chiều không gian sau ghép: **${mm.joint_dim}**`);
+        parts.push(`- Chuẩn L2 vector chiếu: **${mm.joint_l2_norm.toFixed(4)}**`);
+        parts.push(
+            `- Khoảng cách tới tâm tham chiếu (L2): **${mm.distance_to_reference_centroid_l2.toFixed(4)}** (median độ lệch trong tham chiếu: **${mm.reference_typical_distance_median.toFixed(4)}**)`
+        );
+        parts.push(`- Tỷ lệ so với mức “điển hình” trong tham chiếu: **${mm.distance_ratio_vs_typical.toFixed(2)}×**`);
+        parts.push(`- Đánh giá nhanh: ${mm.interpretation_hint}`);
+        parts.push(`- _Lưu ý:_ ${mm.note}`);
+        parts.push(`- 8 thành phần đầu của vector chiếu: \`[${mm.joint_projection_preview.map((x) => x.toFixed(3)).join(', ')}]\``);
+    }
+    if (data.drift_triggered) {
+        parts.push(
+            '\n**Bộ đệm:** đã đạt ngưỡng — hệ thống vừa chạy kiểm tra drift theo lô (ảnh / văn bản / đa phương thức nếu bật). Xem biểu đồ và p-value trên Dashboard.'
+        );
+    } else {
+        parts.push(
+            `\n**Bộ đệm:** đã ghi nhận mẫu (**${data.buffer_count}/${data.buffer_threshold}**). P-value thống kê (MMD, v.v.) chỉ tính sau khi đủ mẫu và flush.`
+        );
+    }
+    return parts.join('\n\n');
+}
+
+const styles = {
+    sidebar: {
+        width: 280,
+        backgroundColor: '#F8FAFC',
+        borderRight: `1px solid ${C.borderLight}`,
+        display: 'flex',
+        flexDirection: 'column',
+    },
+    messageUser: {
+        backgroundColor: '#F1F5F9',
+        border: `1px solid ${C.borderLight}`,
+        borderRadius: '4px',
+        padding: '12px 16px',
+    },
+    messageAi: {
+        backgroundColor: C.white,
+        border: `1px solid ${C.navy}`,
+        borderLeftWidth: '4px',
+        borderRadius: '4px',
+        padding: '12px 16px',
+    },
+    inputContainer: {
+        border: `1px solid ${C.borderLight}`,
+        borderTop: `2px solid ${C.navy}`,
+        backgroundColor: C.white,
+        padding: '16px',
+    }
+};
 
 const ChatPage = () => {
-    // State quản lý tin nhắn và input
     const [messages, setMessages] = useState([]);
     const [question, setQuestion] = useState("");
     const [selectedFile, setSelectedFile] = useState(null);
     const [previewUrl, setPreviewUrl] = useState(null);
-
-    // State quản lý trạng thái hệ thống từ FastAPI
     const [bufferStatus, setBufferStatus] = useState({ count: 0, threshold: 100 });
     const [isProcessing, setIsProcessing] = useState(false);
     const [globalAlert, setGlobalAlert] = useState(false);
-
     const scrollRef = useRef(null);
 
-    // Tự động cuộn xuống khi có tin nhắn mới
     useEffect(() => {
-        if (scrollRef.current) {
-            scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-        }
+        if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }, [messages]);
 
-    // Polling trạng thái buffer mỗi 5 giây
     useEffect(() => {
         const updateStatus = async () => {
             try {
                 const { data } = await axios.get('/api/drift/status');
-                setBufferStatus({ count: data.buffer_count, threshold: data.buffer_threshold });
+                setBufferStatus({
+                    count: data.buffer_count,
+                    threshold: data.buffer_threshold ?? 100,
+                });
                 setGlobalAlert(data.alert);
-            } catch (err) {
-                console.error("Lỗi cập nhật trạng thái:", err);
-            }
+            } catch (err) { console.error(err); }
         };
-        const timer = setInterval(updateStatus, 5000);
         updateStatus();
+        const timer = setInterval(updateStatus, 5000);
         return () => clearInterval(timer);
     }, []);
 
-    // Xử lý chọn file ảnh
     const handleFileChange = (e) => {
         const file = e.target.files[0];
         if (file) {
@@ -58,7 +119,6 @@ const ChatPage = () => {
         }
     };
 
-    // Gửi yêu cầu VQA và Monitor
     const handleSend = async (e) => {
         e.preventDefault();
         if (!question || !selectedFile || isProcessing) return;
@@ -72,21 +132,18 @@ const ChatPage = () => {
         formData.append('image', selectedFile);
 
         try {
-            // Gọi API collect để lưu embedding vào buffer
             const { data } = await axios.post('/api/drift/collect', formData);
-
-            // Giả lập câu trả lời từ VQA service (trong thực tế sẽ lấy từ model VQA của bạn)
             const aiResponse = {
                 role: 'ai',
-                text: "Hệ thống đã nhận được dữ liệu. Dựa trên phân tích sơ bộ, hình ảnh có dấu hiệu tương ứng với các triệu chứng lâm sàng bạn đã nêu.",
-                driftAlert: data.alert, // Lấy alert flag từ backend
-                timestamp: new Date().toLocaleTimeString()
+                text: formatMultimodalAssistantReply(data),
+                driftAlert: data.alert,
+                driftTriggered: data.drift_triggered,
+                bufferCount: data.buffer_count,
+                bufferThreshold: data.buffer_threshold,
+                timestamp: new Date().toLocaleTimeString('vi-VN')
             };
-
             setMessages(prev => [...prev, aiResponse]);
-            setQuestion("");
-            setSelectedFile(null);
-            setPreviewUrl(null);
+            setQuestion(""); setSelectedFile(null); setPreviewUrl(null);
         } catch (err) {
             setMessages(prev => [...prev, { role: 'ai', text: "Lỗi kết nối AI Service.", isError: true }]);
         } finally {
@@ -95,135 +152,133 @@ const ChatPage = () => {
     };
 
     return (
-        <div className="flex h-screen bg-[#f9f8f6] text-gray-800">
+        <GovLayout systemStatus={!globalAlert}>
+            <div className="flex h-[calc(100vh-180px)] bg-white overflow-hidden border border-gray-200">
 
-            {/* Sidebar: Lịch sử và Trạng thái */}
-            <aside className="w-64 bg-[#f0eee5] border-r border-gray-200 hidden md:flex flex-col">
-                <div className="p-4 border-b border-gray-300">
-                    <button className="w-full py-2 px-4 flex items-center justify-center gap-2 border border-gray-400 rounded-lg text-sm font-medium hover:bg-gray-200 transition">
-                        <Plus size={16} /> Cuộc hội thoại mới
-                    </button>
-                </div>
-
-                <div className="flex-1 overflow-y-auto p-4">
-                    <div className="flex items-center gap-2 text-xs font-semibold text-gray-500 uppercase mb-4">
-                        <History size={14} /> Gần đây
+                {/* Sidebar: Kiểu danh mục văn bản */}
+                <aside style={styles.sidebar} className="hidden md:flex">
+                    <div className="p-4 border-b border-gray-200 bg-white">
+                        <button className="w-full py-2 px-4 flex items-center justify-center gap-2 bg-[#F8FAFC] border border-[#0055a4] text-[#0055a4] text-xs font-bold uppercase tracking-wider hover:bg-blue-50 transition">
+                            <Plus size={14} /> Phiên làm việc mới
+                        </button>
                     </div>
-                    <div className="space-y-1">
-                        {['Phân tích X-ray phổi', 'Sàng lọc model drift'].map((item, idx) => (
-                            <div key={idx} className="text-sm p-2 hover:bg-gray-200 rounded cursor-pointer truncate">
-                                {item}
-                            </div>
-                        ))}
-                    </div>
-                </div>
 
-                <div className="p-4 border-t border-gray-300 space-y-3">
-                    <div className="flex justify-between items-center text-[11px] text-gray-500 uppercase">
-                        <span>Buffer Monitoring</span>
-                        <span>{bufferStatus.count}/{bufferStatus.threshold}</span>
-                    </div>
-                    <div className="w-full bg-gray-300 h-1 rounded-full overflow-hidden">
-                        <div
-                            className="bg-blue-600 h-full transition-all duration-500"
-                            style={{ width: `${(bufferStatus.count / bufferStatus.threshold) * 100}%` }}
-                        />
-                    </div>
-                </div>
-            </aside>
-
-            {/* Main Chat Area */}
-            <main className="flex-1 flex flex-col relative bg-white">
-
-                {/* Top Header */}
-                <header className="px-6 py-4 flex justify-between items-center border-b border-gray-100 shadow-sm z-10 bg-white">
-                    <div className="font-semibold text-lg text-orange-900 tracking-tight">MedDrift Sentinel</div>
-                    <div className="flex items-center gap-4 text-gray-500">
-                        <Settings size={20} className="hover:text-gray-800 cursor-pointer" />
-                        <div className="w-8 h-8 rounded-full bg-orange-100 flex items-center justify-center text-orange-800 text-xs font-bold">
-                            BS
+                    <div className="flex-1 overflow-y-auto p-4">
+                        <div className="flex items-center gap-2 text-[10px] font-bold text-gray-400 uppercase mb-4 tracking-widest">
+                            <History size={12} /> Nhật ký phân tích
                         </div>
-                    </div>
-                </header>
-
-                {/* Messages Window */}
-                <div ref={scrollRef} className="flex-1 overflow-y-auto p-6 space-y-8">
-                    {messages.length === 0 && (
-                        <div className="max-w-2xl mx-auto text-center mt-32 space-y-4">
-                            <h2 className="text-3xl font-light text-gray-400">Tôi có thể giúp gì cho bác sĩ hôm nay?</h2>
-                            <p className="text-sm text-gray-400">Tải ảnh X-ray và đặt câu hỏi để bắt đầu phân tích VQA.</p>
-                        </div>
-                    )}
-
-                    {messages.map((msg, idx) => (
-                        <div key={idx} className={`max-w-2xl mx-auto flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                            <div className={`group relative p-4 rounded-2xl shadow-sm border border-gray-100 ${msg.role === 'user' ? 'bg-gray-100' : 'bg-white'}`}>
-                                {msg.image && (
-                                    <img src={msg.image} alt="Medical" className="max-w-sm rounded-lg mb-3 border border-gray-200" />
-                                )}
-                                <p className="text-[15px] leading-relaxed">{msg.text}</p>
-
-                                {/* Drift Alert Badge */}
-                                {msg.role === 'ai' && !msg.isError && (
-                                    <div className="mt-3 flex items-center gap-2">
-                                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-tighter ${msg.driftAlert ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'
-                                            }`}>
-                                            {msg.driftAlert ? <AlertCircle size={10} /> : <CheckCircle2 size={10} />}
-                                            {msg.driftAlert ? 'Critical Drift' : 'Safe Distribution'}
-                                        </span>
-                                        <span className="text-[10px] text-gray-400">{msg.timestamp}</span>
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-                    ))}
-                </div>
-
-                {/* Global Drift Warning */}
-                {globalAlert && (
-                    <div className="absolute top-20 left-1/2 -translate-x-1/2 w-full max-w-lg px-4 animate-bounce">
-                        <div className="bg-red-50 border border-red-200 p-3 rounded-xl shadow-lg flex items-center justify-between">
-                            <div className="flex items-center gap-3 text-red-700">
-                                <AlertCircle size={20} />
-                                <div className="text-xs">
-                                    <p className="font-bold">Cảnh báo Drift!</p>
-                                    <p>Phát hiện sự thay đổi lớn trong phân phối dữ liệu đầu vào.</p>
+                        <div className="space-y-1">
+                            {['X-ray Phổi_2026-05-12', 'Sàng lọc Drift_Phòng 402'].map((item, idx) => (
+                                <div key={idx} className="text-xs p-2.5 hover:bg-blue-50 border-b border-gray-100 cursor-pointer truncate font-medium text-gray-600 flex items-center gap-2">
+                                    <MessageSquare size={12} className="text-[#0055a4]" /> {item}
                                 </div>
-                            </div>
-                            <button onClick={() => setGlobalAlert(false)} className="text-red-400 hover:text-red-600">
-                                <X size={16} />
-                            </button>
+                            ))}
                         </div>
                     </div>
-                )}
 
-                {/* Input Bar Section */}
-                <div className="px-6 pb-6 bg-white">
-                    <div className="max-w-2xl mx-auto relative">
+                    {/* Monitoring Widget in Sidebar */}
+                    <div className="p-4 bg-[#0055a4] text-white">
+                        <div className="flex justify-between items-center text-[10px] font-bold uppercase mb-2">
+                            <span>Giám sát Hệ thống</span>
+                            <span>{bufferStatus.count}/{bufferStatus.threshold}</span>
+                        </div>
+                        <div className="w-full bg-blue-900/50 h-1.5 rounded-full overflow-hidden">
+                            <div
+                                className="bg-white h-full transition-all duration-500"
+                                style={{ width: `${(bufferStatus.count / bufferStatus.threshold) * 100}%` }}
+                            />
+                        </div>
+                        <p className="text-[9px] mt-2 opacity-70 italic text-center">Trạng thái: Đang thu thập dữ liệu</p>
+                    </div>
+                </aside>
 
-                        {/* Ảnh đang chờ gửi */}
-                        {previewUrl && (
-                            <div className="absolute -top-24 left-0 p-2 bg-white border border-gray-200 rounded-xl shadow-md flex items-center gap-2">
-                                <img src={previewUrl} className="h-16 w-16 object-cover rounded-md" />
-                                <button onClick={() => { setSelectedFile(null); setPreviewUrl(null); }} className="text-gray-400 hover:text-red-500">
-                                    <X size={16} />
-                                </button>
+                {/* Main Chat Area */}
+                <main className="flex-1 flex flex-col bg-[#F1F5F9]/30 relative">
+
+                    {/* Messages Window */}
+                    <div ref={scrollRef} className="flex-1 overflow-y-auto p-6 space-y-6">
+                        {messages.length === 0 && (
+                            <div className="max-w-3xl mx-auto text-center mt-20 p-8 border-2 border-dashed border-gray-200">
+                                <ShieldCheck size={48} className="mx-auto text-[#0055a4] opacity-20 mb-4" />
+                                <h2 className="text-xl font-bold text-gray-400 uppercase tracking-tight">Hệ thống hỗ trợ chẩn đoán AI</h2>
+                                <p className="text-sm text-gray-400 mt-2">Vui lòng tải tệp tin hình ảnh (.jpg, .png) để thực hiện phân tích VQA và giám sát Drift.</p>
                             </div>
                         )}
 
-                        <div className="border border-gray-300 rounded-3xl p-4 shadow-sm focus-within:border-orange-300 focus-within:ring-4 focus-within:ring-orange-50/50 transition-all">
-                            <form onSubmit={handleSend}>
+                        {messages.map((msg, idx) => (
+                            <div key={idx} className={`max-w-3xl mx-auto flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                                <div style={msg.role === 'user' ? styles.messageUser : styles.messageAi} className="max-w-[85%]">
+                                    {msg.image && (
+                                        <img src={msg.image} alt="Medical" className="max-w-full h-auto border border-gray-300 mb-3" />
+                                    )}
+                                    <div className={`text-sm leading-relaxed font-medium ${msg.role === 'ai' ? 'prose prose-sm max-w-none' : ''}`}>
+                                        {msg.role === 'ai' && !msg.isError ? (
+                                            <Markdown>{msg.text}</Markdown>
+                                        ) : (
+                                            <p className="m-0">{msg.text}</p>
+                                        )}
+                                    </div>
+
+                                    {/* Alert Badge: Phong cách hành chính */}
+                                    {msg.role === 'ai' && !msg.isError && (
+                                        <div className="mt-3 pt-2 border-t border-gray-100 flex items-center justify-between">
+                                            {msg.driftTriggered ? (
+                                                <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 font-bold uppercase text-[9px] tracking-wider ${msg.driftAlert ? 'text-[#ed1c24] bg-red-50' : 'text-emerald-700 bg-emerald-50'}`}>
+                                                    {msg.driftAlert ? <AlertCircle size={10} /> : <CheckCircle2 size={10} />}
+                                                    {msg.driftAlert ? 'Cảnh báo: Phát hiện Drift' : 'Phân phối dữ liệu: An toàn'}
+                                                </span>
+                                            ) : (
+                                                <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 font-bold uppercase text-[9px] tracking-wider text-amber-700 bg-amber-50`}>
+                                                    <Clock size={10} />
+                                                    {`Đã lưu dữ liệu (${msg.bufferCount}/${msg.bufferThreshold ?? 100}) — Đang chờ phân tích`}
+                                                </span>
+                                            )}
+                                            <span className="text-[10px] text-gray-400 font-mono italic">{msg.timestamp}</span>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+
+                    {/* Global Alert Notification */}
+                    {globalAlert && (
+                        <div className="absolute top-4 left-1/2 -translate-x-1/2 w-full max-w-md px-4">
+                            <div className="bg-white border-l-4 border-[#ed1c24] p-4 shadow-xl flex items-center justify-between">
+                                <div className="flex items-center gap-3 text-[#ed1c24]">
+                                    <AlertCircle size={20} />
+                                    <div className="text-xs">
+                                        <p className="font-bold uppercase">Cảnh báo sai lệch phân phối!</p>
+                                        <p className="opacity-80">Yêu cầu kiểm tra lại tham số Model ID.</p>
+                                    </div>
+                                </div>
+                                <button onClick={() => setGlobalAlert(false)} className="text-gray-300 hover:text-gray-600"><X size={16} /></button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Input Bar Section: Chỉnh lại thanh điều khiển */}
+                    <div style={styles.inputContainer}>
+                        <div className="max-w-3xl mx-auto relative">
+                            {previewUrl && (
+                                <div className="absolute -top-24 left-0 p-1.5 bg-white border border-[#0055a4] shadow-lg flex items-center gap-2">
+                                    <img src={previewUrl} className="h-16 w-16 object-cover" />
+                                    <button onClick={() => { setSelectedFile(null); setPreviewUrl(null); }} className="text-red-500 hover:bg-red-50 p-1"><X size={16} /></button>
+                                </div>
+                            )}
+
+                            <form onSubmit={handleSend} className="flex flex-col">
                                 <textarea
                                     value={question}
                                     onChange={(e) => setQuestion(e.target.value)}
-                                    placeholder="Hỏi MedDrift về hình ảnh y khoa..."
-                                    className="w-full resize-none border-none focus:ring-0 outline-none text-gray-700 h-24 placeholder-gray-400"
+                                    placeholder="Nhập nội dung câu hỏi chuyên môn..."
+                                    className="w-full resize-none border-none focus:ring-0 outline-none text-sm h-20 placeholder-gray-300 font-medium"
                                 />
 
-                                <div className="flex items-center justify-between mt-2 pt-2 border-t border-gray-50">
-                                    <div className="flex gap-1">
-                                        <label className="p-2 text-gray-400 hover:text-orange-700 hover:bg-orange-50 rounded-full transition cursor-pointer">
-                                            <Paperclip size={20} />
+                                <div className="flex items-center justify-between mt-2 pt-2 border-t border-gray-100">
+                                    <div className="flex gap-2">
+                                        <label className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 border border-gray-200 text-gray-500 text-xs font-bold uppercase cursor-pointer hover:bg-gray-100 transition">
+                                            <Paperclip size={14} /> Đính kèm ảnh
                                             <input type="file" className="hidden" onChange={handleFileChange} accept="image/*" />
                                         </label>
                                     </div>
@@ -231,20 +286,23 @@ const ChatPage = () => {
                                     <button
                                         type="submit"
                                         disabled={!question || !selectedFile || isProcessing}
-                                        className="p-2 bg-orange-800 text-white rounded-full hover:bg-orange-900 transition disabled:bg-gray-200 disabled:text-gray-400"
+                                        className="px-6 py-1.5 bg-[#0055a4] text-white text-xs font-bold uppercase tracking-widest hover:bg-[#004485] transition disabled:bg-gray-200 flex items-center gap-2"
                                     >
-                                        {isProcessing ? <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <ArrowUp size={20} />}
+                                        {isProcessing ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <><ArrowUp size={14} /> Gửi yêu cầu</>}
                                     </button>
                                 </div>
                             </form>
                         </div>
-                        <p className="text-[10px] text-gray-400 text-center mt-3 uppercase tracking-tighter">
-                            Công cụ hỗ trợ chẩn đoán AI Sentinel v1.0 — HCMUS IT Project
-                        </p>
                     </div>
-                </div>
-            </main>
-        </div>
+                </main>
+            </div>
+
+            <div className="mt-4 text-center">
+                <p className="text-[9px] text-gray-400 font-bold uppercase tracking-widest leading-loose">
+                    Công cụ này chỉ hỗ trợ chẩn đoán — Không thay thế quyết định của Hội đồng chuyên môn
+                </p>
+            </div>
+        </GovLayout>
     );
 };
 
