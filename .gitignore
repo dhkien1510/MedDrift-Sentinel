@@ -46,3 +46,9 @@ meddrift-frontend/dist/
 # File tạm của hệ thống
 .DS_Store
 Thumbs.db
+
+hf_cache/
+mongo_data/
+# Nếu data quá nặng
+data/reference_data/
+data/drift_scenarios/
