@@ -1,41 +1,57 @@
-image:
-  encoder: 'openai/clip-vit-base-patch32'
-  algorithm: 'kolmogorov-smirnov'
-  allow_method: [
-    'kolmogorov-smirnov',
-    'cramer-von-mises',
-    'mmd',
-    'learned-kernel-mmd',
-    'context-aware-mmd',
-    'least-square-density-difference',
-    'classifier-uncertainty',
-    'spot-the-diff',
-    'regressor-uncertainty'
-  ]
-  p_threshold: 0.05
-
-text:
-  encoder: 'dmis-lab/biobert-v1.1'
-  algorithm: 'kolmogorov-smirnov'
-  allow_method: [
-    'kolmogorov-smirnov',
-    'mmd',
-    'learned-kernel-mmd',
-    'context-aware-mmd',
-    'least-square-density-difference',
-    'classifier-uncertainty',
-    'spot-the-diff',
-    'regressor-uncertainty'
-  ] 
-
-  p_threshold: 0.05
-
-reference:
-  data_dir: "data/reference_data"
-  image_file: "ref_images.npy"
-  text_file: "ref_questions.npy"
-  data: 'flaviagiammarino/vqa-rad'
-  num_samples: 500
-
 buffer:
-  threshold: 100    # Số samples cần tích lũy trước khi chạy drift detection
+  threshold: 500
+image:
+  algorithm: cramer-von-mises
+  allow_encoder:
+  - openai/clip-vit-base-patch32
+  - microsoft/rad-dino
+  - microsoft/rad-dino-maira-2
+  - facebook/dinov2-base
+  - google/vit-base-patch16-224
+  allow_method:
+  - kolmogorov-smirnov
+  - cramer-von-mises
+  - mmd
+  - learned-kernel-mmd
+  - context-aware-mmd
+  - least-square-density-difference
+  - classifier-uncertainty
+  - spot-the-diff
+  - regressor-uncertainty
+  encoder: microsoft/rad-dino-maira-2
+  p_threshold: 0.11
+multimodal:
+  algorithm: mmd
+  enabled: true
+  joint_reference_npy: data/reference_data/res/ref_multimodal_joint.npy
+  n_components: 128
+  p_threshold: 0.1
+  pca_pickle: data/reference_data/res/multimodal_pca.pckl
+reference:
+  data: flaviagiammarino/vqa-rad
+  data_dir: data/reference_data
+  drift_output_dir: drift_scenarios
+  image_file: ref_images.npy
+  num_samples: 500
+  text_file: ref_questions.npy
+text:
+  algorithm: kolmogorov-smirnov
+  allow_encoder:
+  - dmis-lab/biobert-v1.1
+  - microsoft/BiomedNLP-BiomedBERT-base-uncased-abstract
+  - microsoft/BiomedNLP-BiomedBERT-base-uncased-abstract-fulltext
+  - NeuML/pubmedbert-base-embeddings
+  - pritamdeka/S-PubMedBert-MS-MARCO
+  - NeuML/pubmedbert-base-embeddings-matryoshka
+  - NeuML/pubmedbert-base-embeddings-8M
+  allow_method:
+  - kolmogorov-smirnov
+  - mmd
+  - learned-kernel-mmd
+  - context-aware-mmd
+  - least-square-density-difference
+  - classifier-uncertainty
+  - spot-the-diff
+  - regressor-uncertainty
+  encoder: NeuML/pubmedbert-base-embeddings
+  p_threshold: 0.2
