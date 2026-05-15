@@ -11,10 +11,9 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const FASTAPI_URL = process.env.FASTAPI_URL || 'http://fastapi-service:8000';
+const FASTAPI_URL = process.env.FASTAPI_URL || 'http://service:8000';
 
 app.use(cors());
-app.use(express.json());
 
 // Proxy cấu hình mới (đã sửa lỗi path stripping trước đó)
 app.use(createProxyMiddleware({
@@ -23,6 +22,8 @@ app.use(createProxyMiddleware({
     secure: false,
     pathFilter: ['/api', '/health'],
 }));
+
+app.use(express.json());
 
 const frontendPath = path.join(__dirname, '../../meddrift-frontend/dist');
 app.use(express.static(frontendPath));
