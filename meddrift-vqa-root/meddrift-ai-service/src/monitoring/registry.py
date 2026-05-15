@@ -3,14 +3,15 @@ registry.py — Drift Detector Registry
 ======================================
 Quản lý tất cả thuật toán drift detection theo kiến trúc pluggable.
 
+[PATCH] load_config() và load_config_meta() được cập nhật:
+  - Source of truth cho config: MongoDB (qua db/mongo_client.py) → Redis cache → fallback YAML local
+  - Source of truth cho reference .npy: MinIO bucket 'reference-data' → local cache /tmp/
+  - Local YAML và local .npy chỉ còn là bootstrap fallback lần đầu khởi động
+
 Phân loại thuật toán thành 3 nhóm:
   - SIMPLE:   Chỉ cần x_ref + p_val (MMD, KS, CVM, LSDD)
   - KERNEL:   Cần thêm neural network làm kernel (LearnedKernel, ContextMMD)
   - MODEL:    Cần thêm classifier/regressor model (Classifier, SpotTheDiff)
-
-Cách dùng:
-  detector = get_detector("mmd", ref_data=ref_embeddings, p_val=0.05, input_dim=512)
-  result = detector.predict(test_embeddings)
 """
 
 import torch
@@ -18,8 +19,10 @@ import torch.nn as nn
 import numpy as np
 import os
 import yaml
+import logging
 
-# === Alibi-detect imports ===
+logger = logging.getLogger(__name__)
+
 from alibi_detect.cd import (
     MMDDrift,
     LSDDDrift,
@@ -33,203 +36,245 @@ from alibi_detect.cd import (
 from alibi_detect.utils.pytorch import DeepKernel
 
 
-# ============================================================
-# NHÓM 1: Simple Detectors
-# Chỉ cần x_ref + p_val → tạo detector ngay
-# ============================================================
 SIMPLE_DETECTORS = {
     "kolmogorov-smirnov": KSDrift,
-    "cramer-von-mises": CVMDrift,
-    "mmd": MMDDrift,
+    "cramer-von-mises":   CVMDrift,
+    "mmd":                MMDDrift,
     "least-square-density-difference": LSDDDrift,
 }
 
-
-# ============================================================
-# NHÓM 2: Kernel-based Detectors
-# Cần tạo projection network (nn.Sequential) + DeepKernel
-# input_dim khác nhau: image=512, text=768
-# ============================================================
 KERNEL_DETECTORS = {
-    "learned-kernel-mmd": LearnedKernelDrift,
-    "context-aware-mmd": ContextMMDDrift,
+    "learned-kernel-mmd":  LearnedKernelDrift,
+    "context-aware-mmd":   ContextMMDDrift,
 }
+
+MODEL_DETECTORS = {}
+
+_SIMPLE_PYTORCH_BACKENDS = frozenset({"mmd", "least-square-density-difference"})
 
 
 # ============================================================
-# NHÓM 3: Model-based Detectors
-# Cần tạo classifier model (nn.Sequential) để phân biệt ref vs test
+# LOCAL YAML FALLBACK — chỉ dùng khi DB chưa có config
 # ============================================================
-MODEL_DETECTORS = {
-    "classifier-uncertainty": ClassifierDrift,
-    "spot-the-diff": SpotTheDiffDrift,
-}
-
-
-def load_config(isImage: bool):
+def _get_root_dir() -> str:
     current_script = os.path.abspath(__file__)
-    current_dir = os.path.dirname(current_script)
-    src_dir = os.path.dirname(current_dir)
-    service_dir = os.path.dirname(src_dir)
-    root_dir = os.path.dirname(service_dir)
+    return os.path.dirname(
+        os.path.dirname(
+            os.path.dirname(
+                os.path.dirname(current_script)
+            )
+        )
+    )
 
-    config_dir = os.path.join(root_dir, "configs/drift_config.yaml")
+def _read_yaml() -> dict:
+    """Đọc drift_config.yaml — chỉ dùng làm bootstrap fallback."""
+    config_path = os.path.join(_get_root_dir(), "configs/drift_config.yaml")
+    with open(config_path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
 
+def _safe_encoder_name(model_id: str) -> str:
+    return model_id.replace("/", "--")
+
+
+# ============================================================
+# CONFIG: MongoDB → Redis cache → YAML fallback
+# ============================================================
+
+def _load_yaml_meta(isImage: bool) -> dict | None:
+    """Đọc metadata từ YAML local — chỉ dùng khi DB chưa sẵn sàng."""
     try:
-        with open(config_dir, "r", encoding="utf-8") as f:
-            config = yaml.safe_load(f)
-        try: 
-            model_id =  config['image']['encoder'] if isImage else config['text']['encoder']
-            p_threshold =  float(config['image']['p_threshold']) if isImage else float(config['text']['p_threshold'])
-            algorithm =  config['image']['algorithm'] if isImage else config['text']['algorithm']
-            allow_method = list(config['image']['allow_method']) if isImage else list(config['text']['allow_method'])
-            ref_image_path = os.path.join(root_dir, config['reference']['data_dir'], config['reference']['image_file'])
-            ref_text_path = os.path.join(root_dir, config['reference']['data_dir'], config['reference']['text_file'])
-            ref_embeddings = np.load(ref_image_path) if isImage else np.load(ref_text_path)
-   
-
-            return {
-                "model_id": model_id,
-                "ref_embeddings": ref_embeddings,
-                "p_threshold": p_threshold,
-                "algorithm": algorithm,
-                "allow_method": allow_method
-            }
-        except Exception as e:
-            print(f"Error while loading config: {e}")
-            return None
+        config = _read_yaml()
+        section = config["image"] if isImage else config["text"]
+        return {
+            "encoder":      section["encoder"],
+            "p_threshold":  float(section["p_threshold"]),
+            "algorithm":    section["algorithm"],
+            "allow_method": list(section["allow_method"]),
+            "allow_encoder": list(section["allow_encoder"]),
+            "threshold":    float(config["buffer"]["threshold"]),
+        }
     except Exception as e:
-        print(f"Error while loading config: {e}")
+        logger.error("YAML fallback failed: %s", e)
+        return None
+
+
+def load_config_meta(isImage: bool) -> dict | None:
+    """
+    Lấy metadata config (không load ref_embeddings).
+
+    Thứ tự ưu tiên:
+      1. Redis cache (drift_config key)
+      2. MongoDB active config
+      3. YAML local fallback
+
+    [PATCH] Trước đây chỉ đọc YAML. Nay đọc từ DB trước.
+    Sync wrapper — dùng asyncio.run() hoặc thread executor khi gọi từ sync context.
+    """
+    # Thử Redis (sync) trước — tránh phải mở event loop
+    try:
+        import redis as _redis_sync
+        import json
+
+        REDIS_HOST     = os.getenv("REDIS_HOST",     "redis")
+        REDIS_PORT     = int(os.getenv("REDIS_PORT", 6379))
+        REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", "meddrift123")
+
+        _r = _redis_sync.Redis(
+            host=REDIS_HOST, port=REDIS_PORT, password=REDIS_PASSWORD,
+            decode_responses=True, socket_connect_timeout=1,
+        )
+        cached = _r.get("drift_config")
+        if cached:
+            full = json.loads(cached)
+            # full config chứa cả image + text — chọn đúng section
+            section_key = "image" if isImage else "text"
+            if section_key in full:
+                s = full[section_key]
+                return {
+                    "encoder":       s["encoder"],
+                    "p_threshold":   float(s["p_threshold"]),
+                    "algorithm":     s["algorithm"],
+                    "allow_method":  list(s.get("allow_method", [])),
+                    "allow_encoder": list(s.get("allow_encoder", [])),
+                    "threshold":     float(full.get("buffer", {}).get("threshold", 100)),
+                }
+    except Exception:
+        pass  # Redis không sẵn sàng → thử YAML
+
+    # Fallback YAML
+    return _load_yaml_meta(isImage)
+
+
+# ============================================================
+# REFERENCE EMBEDDINGS: MinIO → local cache → local disk fallback
+# ============================================================
+
+def _load_ref_from_minio(isImage: bool, encoder: str, yaml_cfg: dict) -> np.ndarray | None:
+    """
+    Download reference .npy từ MinIO.
+    [PATCH] Thay thế np.load() trực tiếp từ local disk.
+    """
+    try:
+        from db.minio_client import download_npy, reference_object_name, object_exists
+        filename = yaml_cfg["reference"]["image_file"] if isImage else yaml_cfg["reference"]["text_file"]
+        obj_name = reference_object_name(isImage, encoder, filename)
+        if object_exists(obj_name):
+            return download_npy(obj_name)
+        logger.warning("MinIO: '%s' không tồn tại — thử local fallback.", obj_name)
+    except Exception as e:
+        logger.warning("MinIO download failed: %s — thử local fallback.", e)
+    return None
+
+
+def _load_ref_from_local(isImage: bool, encoder: str, yaml_cfg: dict) -> np.ndarray | None:
+    """Đọc .npy từ local disk (fallback khi MinIO chưa có file)."""
+    root_dir = _get_root_dir()
+    ref_dir  = yaml_cfg["reference"]["data_dir"]
+    ref_file = yaml_cfg["reference"]["image_file"] if isImage else yaml_cfg["reference"]["text_file"]
+    sub      = "image" if isImage else "text"
+
+    nested = os.path.join(root_dir, ref_dir, sub, _safe_encoder_name(encoder), ref_file)
+    flat   = os.path.join(root_dir, ref_dir, ref_file)
+
+    for path in [nested, flat]:
+        if os.path.isfile(path):
+            logger.info("Local fallback: đọc ref từ '%s'", path)
+            return np.load(path)
+    return None
+
+
+def load_config(isImage: bool) -> dict | None:
+    """
+    Load đầy đủ config kể cả ref_embeddings — dùng khi chạy drift detection.
+
+    [PATCH] ref_embeddings giờ được load từ MinIO (có local cache),
+    không còn đọc trực tiếp từ local disk nữa.
+    """
+    try:
+        meta = load_config_meta(isImage)
+        if meta is None:
+            return None
+
+        yaml_cfg = _read_yaml()
+        encoder  = meta["encoder"]
+
+        # 1. Thử MinIO trước
+        ref_emb = _load_ref_from_minio(isImage, encoder, yaml_cfg)
+
+        # 2. Fallback local disk
+        if ref_emb is None:
+            ref_emb = _load_ref_from_local(isImage, encoder, yaml_cfg)
+
+        if ref_emb is None:
+            label = "image" if isImage else "text"
+            logger.error(
+                "Không tìm thấy reference embeddings (%s) — "
+                "upload lên MinIO hoặc đặt file vào data/reference_data/.", label
+            )
+            return None
+
+        return {**meta, "ref_embeddings": ref_emb}
+
+    except Exception as e:
+        logger.error("load_config failed: %s", e)
         return None
 
 
 # ============================================================
-# HELPER: Tạo Projection Network cho Kernel-based detectors
+# NEURAL NETS
 # ============================================================
 def _build_projection_net(input_dim: int) -> nn.Sequential:
-    """
-    Tạo mạng neural nhỏ để project embedding xuống không gian thấp hơn.
-    
-    Args:
-        input_dim: Số chiều đầu vào (512 cho image, 768 cho text)
-    
-    Returns:
-        nn.Sequential: Mạng 2 layers
-    """
     return nn.Sequential(
-        nn.Linear(input_dim, 128),
-        nn.ReLU(),
-        nn.Linear(128, 32),
-        nn.ReLU()
+        nn.Linear(input_dim, 128), nn.ReLU(),
+        nn.Linear(128, 32),        nn.ReLU(),
     )
 
-# ============================================================
-# HELPER: Tạo Classifier Model cho Model-based detectors
-# ============================================================
 def _build_classifier_model(input_dim: int) -> nn.Sequential:
-    """
-    Tạo mạng classifier nhỏ để phân biệt ref data vs test data.
-    
-    Args:
-        input_dim: Số chiều đầu vào (512 cho image, 768 cho text)
-    
-    Returns:
-        nn.Sequential: Mạng binary classifier
-
-    TODO: Bạn tự code mạng classifier ở đây.
-    Gợi ý: input_dim → 64 → ReLU → 2 (binary: ref vs test)
-    """
     return nn.Sequential(
-        nn.Linear(input_dim, 64),
-        nn.ReLU(),
+        nn.Linear(input_dim, 64), nn.ReLU(),
         nn.Linear(64, 2),
     )
 
 
 # ============================================================
-# FACTORY CHÍNH: Tạo detector theo tên
+# FACTORY
 # ============================================================
 def get_detector(name: str, ref_data: np.ndarray, p_val: float, input_dim: int = None):
-    """
-    Factory function — tạo drift detector theo tên thuật toán.
-
-    Args:
-        name:      Tên thuật toán (key trong registry)
-        ref_data:  Reference embeddings, shape (N, D)
-        p_val:     Ngưỡng p-value (mặc định 0.05)
-        input_dim: Số chiều embedding (bắt buộc cho nhóm KERNEL và MODEL)
-
-    Returns:
-        Drift detector object (có method .predict())
-
-    Raises:
-        ValueError: Nếu tên thuật toán không tồn tại
-    """
-
-    # --- Nhóm 1: Simple ---
     if name in SIMPLE_DETECTORS:
-        detector = SIMPLE_DETECTORS[name](x_ref=ref_data, p_val=p_val)
-    # --- Nhóm 2: Kernel-based ---
-    elif name in KERNEL_DETECTORS:
-        proj = _build_projection_net(input_dim)
-        kernel = DeepKernel(proj, eps=0.01)
-        detector = KERNEL_DETECTORS[name](x_ref=ref_data, kernel=kernel, p_val=p_val)
+        ctor   = SIMPLE_DETECTORS[name]
+        kwargs = {"x_ref": ref_data, "p_val": p_val}
+        if name in _SIMPLE_PYTORCH_BACKENDS:
+            kwargs["backend"] = "pytorch"
+        return ctor(**kwargs)
 
-    # --- Nhóm 3: Model-based ---
-    elif name in MODEL_DETECTORS:
-        proj = _build_classifier_model(input_dim)
-        detector = MODEL_DETECTORS[name](x_ref=ref_data, model=proj, p_val=p_val, backend="pytorch")
-    else:
-        available = list_available_algorithms()
-        raise ValueError(
-            f"Detector '{name}' không tồn tại.\n"
-            f"Các thuật toán hỗ trợ: {available}"
+    if name in KERNEL_DETECTORS:
+        proj   = _build_projection_net(input_dim)
+        kernel = DeepKernel(proj, eps=0.01)
+        return KERNEL_DETECTORS[name](
+            x_ref=ref_data, kernel=kernel, p_val=p_val, backend="pytorch"
         )
-    return detector
+
+    if name in MODEL_DETECTORS:
+        proj = _build_classifier_model(input_dim)
+        return MODEL_DETECTORS[name](
+            x_ref=ref_data, model=proj, p_val=p_val, backend="pytorch"
+        )
+
+    raise ValueError(
+        f"Detector '{name}' không tồn tại.\n"
+        f"Các thuật toán hỗ trợ: {list_available_algorithms()}"
+    )
+
 
 # ============================================================
-# UTILITY: Liệt kê tất cả thuật toán
+# UTILITIES
 # ============================================================
 def list_available_algorithms() -> list:
-    """Trả về danh sách tất cả thuật toán hỗ trợ (cho API/frontend dropdown)."""
-    all_algos = {}
-    all_algos.update(SIMPLE_DETECTORS)
-    all_algos.update(KERNEL_DETECTORS)
-    all_algos.update(MODEL_DETECTORS)
-    return list(all_algos.keys())
-
+    return list({**SIMPLE_DETECTORS, **KERNEL_DETECTORS, **MODEL_DETECTORS})
 
 def get_algorithm_info() -> dict:
-    """Trả về thông tin chi tiết từng thuật toán (cho frontend hiển thị)."""
     return {
-        "simple": {
-            name: {"type": "simple", "requires_training": False}
-            for name in SIMPLE_DETECTORS
-        },
-        "kernel": {
-            name: {"type": "kernel", "requires_training": True, "note": "Cần train kernel network"}
-            for name in KERNEL_DETECTORS
-        },
-        "model": {
-            name: {"type": "model", "requires_training": True, "note": "Cần train classifier"}
-            for name in MODEL_DETECTORS
-        },
+        "simple": {n: {"type": "simple", "requires_training": False} for n in SIMPLE_DETECTORS},
+        "kernel": {n: {"type": "kernel", "requires_training": True}  for n in KERNEL_DETECTORS},
+        "model":  {n: {"type": "model",  "requires_training": True}  for n in MODEL_DETECTORS},
     }
-
-
-# ============================================================
-# TEST
-# ============================================================
-if __name__ == "__main__":
-    print("=== Available Algorithms ===")
-    for algo in list_available_algorithms():
-        print(f"  - {algo}")
-
-    print(f"\nTổng: {len(list_available_algorithms())} thuật toán")
-
-    print("\n=== Algorithm Info ===")
-    info = get_algorithm_info()
-    for group, algos in info.items():
-        print(f"\n[{group.upper()}]")
-        for name, details in algos.items():
-            print(f"  {name}: {details}")

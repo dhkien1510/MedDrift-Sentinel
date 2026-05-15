@@ -6,11 +6,13 @@ python-multipart
 # === AI / ML — Embedding Extraction ===
 torch --index-url https://download.pytorch.org/whl/cpu   
 transformers               
+sentence-transformers      
 Pillow                     
 
 # === Drift Detection ===
 alibi-detect             
 numpy            
+scikit-learn
 datasets         
 
 # === LangChain — Agent Framework ===
@@ -23,3 +25,7 @@ langgraph
 # === Config & Utilities ===
 pyyaml                     
 python-dotenv             
+
+motor
+redis[hiredis]
+minio                
