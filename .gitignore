@@ -52,3 +52,4 @@ mongo_data/
 # Nếu data quá nặng
 data/reference_data/
 data/drift_scenarios/
+.md

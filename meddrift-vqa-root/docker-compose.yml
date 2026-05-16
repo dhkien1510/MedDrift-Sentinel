@@ -35,6 +35,7 @@ services:
       - MINIO_ACCESS_KEY=${MINIO_USER}
       - MINIO_SECRET_KEY=${MINIO_PASS}
       - MEDDRIFT_CACHE_DIR=/tmp/meddrift_cache
+    
 
   backend:
     build: ./meddrift-server
