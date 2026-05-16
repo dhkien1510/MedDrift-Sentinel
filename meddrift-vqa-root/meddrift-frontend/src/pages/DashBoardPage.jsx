@@ -138,7 +138,7 @@ const DashBoardPage = () => {
         image_p_threshold: 0.05,
         text_p_threshold: 0.05,
         multimodal_p_threshold: 0.05,
-        multimodal_enabled: false,
+        multimodal_enabled: true,
         image_encoder_label: 'Image',
         text_encoder_label: 'Text',
     });

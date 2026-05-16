@@ -81,7 +81,26 @@ const styles = {
     }
 };
 
+// ── Tạo session mới với id duy nhất ──
+function createSession(messages = []) {
+    return {
+        id: Date.now().toString(),
+        title: null,
+        messages,
+        createdAt: new Date().toLocaleString('vi-VN'),
+    };
+}
+
 const ChatPage = () => {
+    // ── Session state ──
+    const [sessions, setSessions] = useState(() => {
+        try {
+            const saved = localStorage.getItem('chat_sessions');
+            return saved ? JSON.parse(saved) : [];
+        } catch { return []; }
+    });
+    const [activeSessionId, setActiveSessionId] = useState(null);
+
     const [messages, setMessages] = useState([]);
     const [question, setQuestion] = useState("");
     const [selectedFile, setSelectedFile] = useState(null);
@@ -90,6 +109,67 @@ const ChatPage = () => {
     const [isProcessing, setIsProcessing] = useState(false);
     const [globalAlert, setGlobalAlert] = useState(false);
     const scrollRef = useRef(null);
+
+    // ── Lưu sessions vào localStorage mỗi khi thay đổi ──
+    useEffect(() => {
+        try { localStorage.setItem('chat_sessions', JSON.stringify(sessions)); }
+        catch { /* quota exceeded */ }
+    }, [sessions]);
+
+    // ── Sync messages vào session đang active ──
+    useEffect(() => {
+        if (!activeSessionId || messages.length === 0) return;
+        setSessions(prev => prev.map(s => {
+            if (s.id !== activeSessionId) return s;
+            const title = s.title || (messages[0]?.text?.slice(0, 40) + (messages[0]?.text?.length > 40 ? '…' : '')) || 'Phiên không tên';
+            return { ...s, title, messages };
+        }));
+    }, [messages, activeSessionId]);
+
+    // ── Tạo phiên làm việc mới ──
+    const handleNewSession = () => {
+        if (activeSessionId && messages.length > 0) {
+            setSessions(prev => prev.map(s =>
+                s.id === activeSessionId ? { ...s, messages } : s
+            ));
+        }
+        if (!activeSessionId && messages.length > 0) {
+            const newSaved = createSession(messages);
+            newSaved.title = messages[0]?.text?.slice(0, 40) + (messages[0]?.text?.length > 40 ? '…' : '') || 'Phiên không tên';
+            setSessions(prev => [newSaved, ...prev]);
+        }
+        const fresh = createSession();
+        setActiveSessionId(fresh.id);
+        setSessions(prev => [fresh, ...prev]);
+        setMessages([]);
+        setQuestion('');
+        setSelectedFile(null);
+        setPreviewUrl(null);
+    };
+
+    // ── Chọn session từ nhật ký ──
+    const handleSelectSession = (session) => {
+        if (activeSessionId && messages.length > 0) {
+            setSessions(prev => prev.map(s =>
+                s.id === activeSessionId ? { ...s, messages } : s
+            ));
+        }
+        setActiveSessionId(session.id);
+        setMessages(session.messages || []);
+        setQuestion('');
+        setSelectedFile(null);
+        setPreviewUrl(null);
+    };
+
+    // ── Xóa session ──
+    const handleDeleteSession = (e, sessionId) => {
+        e.stopPropagation();
+        setSessions(prev => prev.filter(s => s.id !== sessionId));
+        if (activeSessionId === sessionId) {
+            setActiveSessionId(null);
+            setMessages([]);
+        }
+    };
 
     useEffect(() => {
         if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -124,6 +204,15 @@ const ChatPage = () => {
         if (!question || !selectedFile || isProcessing) return;
 
         setIsProcessing(true);
+        // Tự động tạo session mới nếu chưa có session active
+        let currentSessionId = activeSessionId;
+        if (!currentSessionId) {
+            const fresh = createSession();
+            fresh.title = question.slice(0, 40) + (question.length > 40 ? '…' : '');
+            setSessions(prev => [fresh, ...prev]);
+            setActiveSessionId(fresh.id);
+            currentSessionId = fresh.id;
+        }
         const userMsg = { role: 'user', text: question, image: previewUrl };
         setMessages(prev => [...prev, userMsg]);
 
@@ -158,7 +247,10 @@ const ChatPage = () => {
                 {/* Sidebar: Kiểu danh mục văn bản */}
                 <aside style={styles.sidebar} className="hidden md:flex">
                     <div className="p-4 border-b border-gray-200 bg-white">
-                        <button className="w-full py-2 px-4 flex items-center justify-center gap-2 bg-[#F8FAFC] border border-[#0055a4] text-[#0055a4] text-xs font-bold uppercase tracking-wider hover:bg-blue-50 transition">
+                        <button
+                            onClick={handleNewSession}
+                            className="w-full py-2 px-4 flex items-center justify-center gap-2 bg-[#F8FAFC] border border-[#0055a4] text-[#0055a4] text-xs font-bold uppercase tracking-wider hover:bg-blue-50 transition"
+                        >
                             <Plus size={14} /> Phiên làm việc mới
                         </button>
                     </div>
@@ -168,11 +260,32 @@ const ChatPage = () => {
                             <History size={12} /> Nhật ký phân tích
                         </div>
                         <div className="space-y-1">
-                            {['X-ray Phổi_2026-05-12', 'Sàng lọc Drift_Phòng 402'].map((item, idx) => (
-                                <div key={idx} className="text-xs p-2.5 hover:bg-blue-50 border-b border-gray-100 cursor-pointer truncate font-medium text-gray-600 flex items-center gap-2">
-                                    <MessageSquare size={12} className="text-[#0055a4]" /> {item}
+                            {sessions.filter(s => s.title || s.messages?.length > 0).map((session) => (
+                                <div
+                                    key={session.id}
+                                    onClick={() => handleSelectSession(session)}
+                                    className={`group text-xs p-2.5 border-b border-gray-100 cursor-pointer font-medium flex items-center gap-2 transition
+                                        ${activeSessionId === session.id
+                                            ? 'bg-blue-50 text-[#0055a4] border-l-2 border-l-[#0055a4]'
+                                            : 'hover:bg-blue-50 text-gray-600'}`}
+                                >
+                                    <MessageSquare size={12} className="text-[#0055a4] shrink-0" />
+                                    <div className="flex-1 min-w-0">
+                                        <div className="truncate">{session.title || 'Phiên không tên'}</div>
+                                        <div className="text-[9px] text-gray-400 mt-0.5">{session.createdAt}</div>
+                                    </div>
+                                    <button
+                                        onClick={(e) => handleDeleteSession(e, session.id)}
+                                        className="shrink-0 opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-400 transition p-0.5"
+                                        title="Xóa phiên"
+                                    >
+                                        <X size={10} />
+                                    </button>
                                 </div>
                             ))}
+                            {sessions.filter(s => s.title || s.messages?.length > 0).length === 0 && (
+                                <p className="text-[10px] text-gray-400 italic text-center py-4">Chưa có phiên nào được lưu</p>
+                            )}
                         </div>
                     </div>
 
