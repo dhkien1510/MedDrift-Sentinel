@@ -2,6 +2,33 @@
 
 MedDrift-Sentinel is an AI-powered medical image and text drift detection and monitoring architecture. Designed to monitor production models for conceptual and data drift, it utilizes dual drift tracking (image and text) to ensure reliability and robustness in medical VQA (Visual Question Answering) and related domains.
 
+
+## ⚠️ Important Note on Encoders and Embeddings
+
+While MedDrift-Sentinel supports various encoders for evaluating data drift, **you cannot simply provide any HuggingFace model name** to the configuration files (`drift_config.yaml`). The system strictly requires **pre-computed embeddings** to exist in the `data/reference_data` and `data/drift_scenarios` directories.
+
+**Supported Encoders (Pre-computed in this repository):**
+- **Image Encoders**: 
+  - `microsoft/rad-dino-maira-2`
+  - `microsoft/rad-dino`
+  - `facebook/dinov2-base`
+  - `google/vit-base-patch16-224`
+- **Text Encoders**: 
+  - `NeuML/pubmedbert-base-embeddings`
+  - `NeuML/pubmedbert-base-embeddings-8M`
+  - `NeuML/pubmedbert-base-embeddings-matryoshka`
+  - `dmis-lab/biobert-v1.1`
+  - `microsoft/BiomedNLP-BiomedBERT-base-uncased-abstract`
+  - `microsoft/BiomedNLP-BiomedBERT-base-uncased-abstract-fulltext`
+  - `pritamdeka/S-PubMedBert-MS-MARCO`
+
+> **Note on Multimodal Drift Detection:** 
+> If you are enabling the Multimodal Drift detection path (`multimodal.enabled: true` in config), please note that the joint PCA fusion embeddings have **only** been computed for the combination of:
+> - **Image**: `microsoft/rad-dino-maira-2`
+> - **Text**: `NeuML/pubmedbert-base-embeddings`
+> 
+> Ensure your `drift_config.yaml` is set to these exact encoders if utilizing multimodal drift. Otherwise, the system will fail to find the PCA bundle.
+
 ## Architecture
 
 The system consists of three main application components and robust data infrastructure orchestrated via Docker Compose.
