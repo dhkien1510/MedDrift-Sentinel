@@ -65,6 +65,12 @@ try:
 except ImportError:
     PCA = None
 
+try:
+    from multimodal_fusion import load_bundle, transform_joint
+    _HAS_MULTIMODAL_FUSION = True
+except ImportError:
+    _HAS_MULTIMODAL_FUSION = False
+
 # Import kết nối MongoDB từ thư mục db
 from db.mongo_client import drift_reports, init_db
 from db.redis_client import get_cached_status, cache_drift_status, invalidate_status, invalidate_config
@@ -108,8 +114,208 @@ import time
 import asyncio
 from fastapi import BackgroundTasks
 # ============================================================
-# ENDPOINT: Simulate scenario
+# HELPER: Multimodal PCA scatter — dùng chung cho cả 2 visualization endpoints
 # ============================================================
+
+def _build_multimodal_scatter_2d(
+    img_batch: np.ndarray,
+    txt_batch: np.ndarray,
+    is_scenario: bool,
+) -> list:
+    """
+    Project img_batch + txt_batch vào không gian multimodal chung rồi giảm
+    xuống 2D bằng PCA để vẽ scatter plot.
+
+    Pipeline:
+      1. Load PCA bundle (pca_img, pca_txt) đã fit từ build_multimodal_reference.py
+         → dùng `transform_joint` để chiếu cả batch hiện tại lẫn reference sang
+           không gian joint: concat(pca_img.transform(X), pca_txt.transform(X))
+      2. Load joint_reference_npy (điểm reference đã được project)
+      3. Stack joint_ref + joint_current → fit PCA 2D → giảm về 2 chiều
+      4. Trả về list[{x, y, type}] với type = "Reference" hoặc "Simulation"/"Current"
+
+    Nếu PCA bundle chưa được build (multimodal.enabled = false hoặc file không tồn tại)
+    → trả về [] để frontend bỏ qua tab multimodal một cách graceful.
+    """
+    if PCA is None:
+        return []
+    if not _HAS_MULTIMODAL_FUSION:
+        _logger.warning("multimodal_fusion module not available — skipping multimodal PCA")
+        return []
+
+    # 1. Đọc paths từ drift_config.yaml
+    try:
+        config_path = "/configs/drift_config.yaml"
+        with open(config_path, "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f)
+    except Exception as exc:
+        _logger.error("_build_multimodal_scatter_2d: cannot read drift_config.yaml — %s", exc)
+        return []
+
+    mm = cfg.get("multimodal") or {}
+    if not mm:
+        _logger.warning("_build_multimodal_scatter_2d: no `multimodal` section in config")
+        return []
+
+    pca_pickle_path   = mm.get("pca_pickle")
+    joint_ref_path    = mm.get("joint_reference_npy")
+
+    if not pca_pickle_path or not joint_ref_path:
+        _logger.warning("_build_multimodal_scatter_2d: pca_pickle or joint_reference_npy not set")
+        return []
+
+    # Resolve absolute path (config lưu path tương đối từ ROOT_DIR = /app hoặc /)
+    ROOT_DIR = "/"
+    pca_abs  = pca_pickle_path  if os.path.isabs(pca_pickle_path)  else os.path.join(ROOT_DIR, pca_pickle_path)
+    ref_abs  = joint_ref_path   if os.path.isabs(joint_ref_path)   else os.path.join(ROOT_DIR, joint_ref_path)
+
+    if not os.path.isfile(pca_abs):
+        _logger.warning("_build_multimodal_scatter_2d: PCA bundle not found at %s", pca_abs)
+        return []
+    if not os.path.isfile(ref_abs):
+        _logger.warning("_build_multimodal_scatter_2d: joint reference not found at %s", ref_abs)
+        return []
+
+    try:
+        # 2. Load bundle + joint reference
+        bundle    = load_bundle(pca_abs)       # {"pca_image": PCA, "pca_text": PCA}
+        joint_ref = np.load(ref_abs)           # shape (N_ref, n_components*2)
+
+        img_arr = np.asarray(img_batch)
+        txt_arr = np.asarray(txt_batch)
+
+        # 3. Transform batch hiện tại vào joint space (dùng bundle đã fit)
+        joint_current = transform_joint(img_arr, txt_arr, bundle)  # (N, n_components*2)
+
+        # 4. Stack ref + current → fit PCA 2D → project
+        step     = max(1, len(joint_ref) // 200)   # subsample ref để frontend không lag
+        ref_sub  = joint_ref[::step]
+        combined = np.vstack([ref_sub, joint_current])
+
+        pca2d   = PCA(n_components=2)
+        reduced = pca2d.fit_transform(combined)
+
+        ref_2d  = reduced[:len(ref_sub)]
+        curr_2d = reduced[len(ref_sub):]
+
+        # 5. Build output list
+        label = "Simulation" if is_scenario else "Current"
+        data  = []
+        for pt in ref_2d:
+            data.append({"x": float(pt[0]), "y": float(pt[1]), "type": "Reference"})
+        for pt in curr_2d:
+            data.append({"x": float(pt[0]), "y": float(pt[1]), "type": label})
+
+        return data
+
+    except Exception as exc:
+        _logger.error("_build_multimodal_scatter_2d failed: %s", exc, exc_info=True)
+        return []
+
+
+# ============================================================
+# HELPER: Multimodal live summary cho từng sample đơn lẻ
+# Dùng trong /api/drift/collect để trả feedback ngay cho ChatPage
+# ============================================================
+
+def _get_multimodal_live_summary(img_vec: np.ndarray, txt_vec: np.ndarray) -> dict:
+    """
+    Nhận 1 cặp embedding (img_vec shape (D,), txt_vec shape (D,)) →
+    chiếu vào joint space bằng PCA bundle đã fit → tính các chỉ số so với reference.
+
+    Trả về dict sẵn để JSON:
+      enabled, ready, message,
+      joint_dim, joint_l2_norm,
+      distance_to_reference_centroid_l2,
+      reference_typical_distance_median,
+      distance_ratio_vs_typical,
+      interpretation_hint, note,
+      joint_projection_preview  (8 thành phần đầu)
+    """
+    base = {"enabled": False, "ready": False, "message": ""}
+
+    if not _HAS_MULTIMODAL_FUSION:
+        base["message"] = "multimodal_fusion module không tồn tại."
+        return base
+
+    try:
+        config_path = "/configs/drift_config.yaml"
+        with open(config_path, "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f)
+    except Exception as exc:
+        base["message"] = f"Không đọc được drift_config.yaml: {exc}"
+        return base
+
+    mm = cfg.get("multimodal") or {}
+    if not mm.get("enabled", False):
+        base["enabled"] = False
+        base["message"] = "multimodal.enabled = false trong drift_config.yaml."
+        return base
+
+    base["enabled"] = True
+    pca_pickle_path = mm.get("pca_pickle")
+    joint_ref_path  = mm.get("joint_reference_npy")
+
+    ROOT_DIR = "/"
+    pca_abs = pca_pickle_path if os.path.isabs(pca_pickle_path) else os.path.join(ROOT_DIR, pca_pickle_path)
+    ref_abs = joint_ref_path  if os.path.isabs(joint_ref_path)  else os.path.join(ROOT_DIR, joint_ref_path)
+
+    if not os.path.isfile(pca_abs) or not os.path.isfile(ref_abs):
+        base["message"] = "Chưa có PCA bundle hoặc joint reference — chạy build_multimodal_reference.py trước."
+        return base
+
+    try:
+        bundle    = load_bundle(pca_abs)
+        joint_ref = np.load(ref_abs)                       # (N_ref, joint_dim)
+
+        # Reshape single sample → (1, D) để transform_joint xử lý được
+        img_2d = np.asarray(img_vec).reshape(1, -1)
+        txt_2d = np.asarray(txt_vec).reshape(1, -1)
+        joint_vec = transform_joint(img_2d, txt_2d, bundle)  # (1, joint_dim)
+        joint_vec = joint_vec[0]                              # (joint_dim,)
+
+        # Tính centroid của reference
+        ref_centroid = joint_ref.mean(axis=0)
+
+        # Khoảng cách sample hiện tại tới centroid
+        dist_to_centroid = float(np.linalg.norm(joint_vec - ref_centroid))
+
+        # Phân phối khoảng cách "điển hình" trong reference (mỗi ref point tới centroid)
+        ref_dists = np.linalg.norm(joint_ref - ref_centroid, axis=1)
+        typical_median = float(np.median(ref_dists))
+
+        ratio = dist_to_centroid / (typical_median + 1e-9)
+
+        if ratio < 1.2:
+            hint = "✅ Trong vùng phân phối tham chiếu — dữ liệu bình thường."
+        elif ratio < 2.0:
+            hint = "⚠️ Hơi lệch so với tham chiếu — cần theo dõi."
+        else:
+            hint = "🔴 Xa vùng tham chiếu — có dấu hiệu drift đa phương thức."
+
+        return {
+            "enabled":   True,
+            "ready":     True,
+            "message":   "",
+            "joint_dim": int(joint_vec.shape[0]),
+            "joint_l2_norm": float(np.linalg.norm(joint_vec)),
+            "distance_to_reference_centroid_l2":  dist_to_centroid,
+            "reference_typical_distance_median":  typical_median,
+            "distance_ratio_vs_typical":          float(ratio),
+            "interpretation_hint": hint,
+            "note": "Đây là ước lượng per-sample, p-value chính thức chỉ tính sau khi flush buffer.",
+            "joint_projection_preview": [float(x) for x in joint_vec[:8]],
+        }
+
+    except Exception as exc:
+        _logger.error("_get_multimodal_live_summary failed: %s", exc, exc_info=True)
+        base["message"] = f"Lỗi khi tính multimodal summary: {exc}"
+        return base
+
+
+# ============================================================
+# ENDPOINT: Simulate scenario
+# ===========================================================
 @app.post("/api/drift/simulate_scenario", summary="Run a drift scenario automatically")
 async def simulate_scenario(scenario_name: str, background_tasks: BackgroundTasks):
     """
@@ -208,7 +414,7 @@ async def get_algorithms():
 async def get_drift_visualization(scenario: str = None):
     if PCA is None:
         raise HTTPException(status_code=500, detail="sklearn.decomposition.PCA not available")
-
+    
     def extract_pca(config_is_image, data_list):
         config = load_config(isImage=config_is_image)
         ref_emb = config['ref_embeddings']
@@ -250,6 +456,7 @@ async def get_drift_visualization(scenario: str = None):
             txt_embs = np.load(f"/data/drift_scenarios/text/{safe_txt_enc}/{text_scenario}.npy")[:200]
             image_data = extract_pca(True, img_embs)
             text_data  = extract_pca(False, txt_embs)
+            multimodal_data = _build_multimodal_scatter_2d(img_embs, txt_embs, True)
         except Exception as e:
             _logger.error(f"Cannot load scenario for PCA: {e}")
             image_data = []
@@ -257,10 +464,16 @@ async def get_drift_visualization(scenario: str = None):
     else:
         image_data = extract_pca(True, _image_embedding_buffer)
         text_data = extract_pca(False, _text_embedding_buffer)
+        multimodal_data = _build_multimodal_scatter_2d(
+            np.array(_image_embedding_buffer) if _image_embedding_buffer else np.empty((0,)),
+            np.array(_text_embedding_buffer)  if _text_embedding_buffer  else np.empty((0,)),
+            is_scenario=False,
+        )
         
     return {
         "image_data": image_data,
-        "text_data": text_data
+        "text_data": text_data,
+        "multimodal_data": multimodal_data,
     }
 
 
@@ -456,9 +669,15 @@ async def collect_drift_data(
         img_embedding = extract_image_embedding(pil_image)        # shape (512,)
         txt_embedding = extract_text_embedding([question])        # shape (1, 768)
 
-        # 4. Add to buffer
-        # txt_embedding là (1, 768) → squeeze về (768,) để stack dễ hơn
-        add_to_buffer(img_embedding, txt_embedding.squeeze())
+        # 4. Tính multimodal live summary cho sample này (non-fatal)
+        txt_squeezed = txt_embedding.squeeze()
+        try:
+            mm_summary = _get_multimodal_live_summary(img_embedding, txt_squeezed)
+        except Exception:
+            mm_summary = {"enabled": False, "ready": False, "message": "Lỗi nội bộ khi tính multimodal summary."}
+
+        # 5. Add to buffer
+        add_to_buffer(img_embedding, txt_squeezed)
 
         drift_triggered = False
         report = None
@@ -493,6 +712,7 @@ async def collect_drift_data(
             "drift_triggered": drift_triggered,
             "alert": report.get("alert", False) if report else False,
             "report_id": str(report["_id"]) if report else None,
+            "multimodal": mm_summary,
         }
 
     except HTTPException:
