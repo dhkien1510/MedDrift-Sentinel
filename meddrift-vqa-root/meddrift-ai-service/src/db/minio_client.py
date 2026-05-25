@@ -38,14 +38,15 @@ logger = logging.getLogger(__name__)
 # ============================================================
 MINIO_ENDPOINT   = os.getenv("MINIO_ENDPOINT",   "minio:9000")
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "meddrift")
-MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "meddrift123")
+MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY")
 MINIO_SECURE     = os.getenv("MINIO_SECURE", "false").lower() == "true"
 
 BUCKET_IMAGES    = "medical-images"
 BUCKET_REFERENCE = "reference-data"   # chứa cả ref + scenario .npy
 
 # Local cache directory (trong container, mất khi restart — đây là bình thường)
-LOCAL_CACHE_DIR = Path(os.getenv("MEDDRIFT_CACHE_DIR", "/tmp/meddrift_cache"))
+import tempfile
+LOCAL_CACHE_DIR = Path(os.getenv("MEDDRIFT_CACHE_DIR", os.path.join(tempfile.gettempdir(), "meddrift_cache")))
 
 # ============================================================
 # KHỞI TẠO CLIENT

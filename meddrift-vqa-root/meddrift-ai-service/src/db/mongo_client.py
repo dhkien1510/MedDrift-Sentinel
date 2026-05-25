@@ -16,7 +16,7 @@ Lý do thêm drift_config:
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
 
-MONGO_URI     = os.getenv("MONGO_URI",     "mongodb://meddrift:meddrift123@mongodb:27017")
+MONGO_URI     = os.getenv("MONGO_URI")
 MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "meddirft")
 client = AsyncIOMotorClient(MONGO_URI)
 db     = client[MONGO_DB_NAME]
