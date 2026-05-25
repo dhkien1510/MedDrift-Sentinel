@@ -82,7 +82,7 @@ Run the provided script to download the datasets into the data/ folder:
 pip install huggingface_hub
 python meddrift-vqa-root/meddrift-ai-service/scripts/download_data.py
 ```
-*(Make sure you update the `repo_id` inside download_data.py to point to your specific Hugging Face Dataset repo).*
+
 
 ### 3. Run the Application with Docker Compose
 Start all services in detached mode:
