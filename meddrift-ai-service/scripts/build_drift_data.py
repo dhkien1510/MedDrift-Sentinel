@@ -327,7 +327,7 @@ def load_config(config_path: str = None) -> dict:
     Mặc định tìm file tại: <repo_root>/configs/drift_config.yaml
     """
     if config_path is None:
-        # Script nằm ở meddrift-ai-service/scripts/ → đi lên 3 cấp tới meddrift-vqa-root
+        # Script nằm ở meddrift-ai-service/scripts/ → đi lên 3 cấp tới project root
         script_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         config_path = os.path.join(script_dir, "configs", "drift_config.yaml")
 
@@ -364,7 +364,7 @@ def build_drift_scenarios(config: dict):
     dataset_path    = config["reference"]["data"]
     num_samples     = config["reference"]["num_samples"]
 
-    # Script nằm ở meddrift-ai-service/scripts/ → thư mục gốc
+    # Script nằm ở meddrift-ai-service/scripts/ → thư mục gốc project
     script_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     out_root = Path(script_dir) / "data" / config["reference"].get("drift_output_dir", "drift_scenarios")
     

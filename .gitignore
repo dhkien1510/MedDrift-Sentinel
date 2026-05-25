@@ -9,17 +9,21 @@ venv/
 
 # --- NodeJS (Server & Frontend) ---
 node_modules/
-/meddrift-frontend/dist/
-/meddrift-frontend/build/
+meddrift-frontend/dist/
+meddrift-frontend/build/
 npm-debug.log*
 
-# --- Environment & Data ---
+# --- Environment & Secrets ---
 .env
 .env.*.local
+# Keep .env.example and .dump.env tracked for developer reference
+
+# --- Large Data Files ---
 *.npy
-data/reference_data/*.npy
-# Ignore các folder chứa dataset lớn nếu có
-/data/datasets/
+data/reference_data/
+data/drift_scenarios/
+# Ignore large dataset folders
+data/datasets/
 
 # --- IDE & OS ---
 .vscode/
@@ -31,24 +35,12 @@ Thumbs.db
 # --- Logs ---
 logs/
 *.log
+meddrift-server/logs/
 
-# Checkpoints của Jupyter
+# --- Jupyter Checkpoints ---
 .ipynb_checkpoints/
 */.ipynb_checkpoints/
 
-# Các file log sinh ra khi chạy service
-*.log
-meddrift-server/logs/
-
-# Folder build của frontend (nếu lỡ tay build local)
-meddrift-frontend/dist/
-
-# File tạm của hệ thống
-.DS_Store
-Thumbs.db
-
+# --- Runtime / Cache Directories ---
 hf_cache/
 mongo_data/
-# Nếu data quá nặng
-data/reference_data/
-data/drift_scenarios/

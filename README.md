@@ -44,11 +44,19 @@ The system consists of three main application components and robust data infrast
 
 ## Directory Structure
 
-- `meddrift-ai-service/`: Core FastAPI AI monitoring pipeline.
-- `meddrift-server/`: Node.js backend proxy.
-- `meddrift-frontend/`: Vite + React web interface.
-- `configs/`: YAML configurations for the drift pipelines (`drift_config.yaml`).
-- `docker-compose.yml`: Multi-container orchestration setup.
+```
+project-root/
+├── meddrift-ai-service/   # Core AI engine (FastAPI / Python) — src/, scripts/, Dockerfile
+├── meddrift-server/       # Node.js backend gateway (Express)
+├── meddrift-frontend/     # React + Vite web dashboard
+├── data/                  # Reference embeddings & drift scenarios (downloaded via script)
+├── models/                # Model documentation — encoder selection & evaluation
+├── configs/               # YAML configuration for drift pipelines (drift_config.yaml)
+├── doc/                   # Architecture & project documentation
+├── docker-compose.yml     # Multi-container orchestration
+├── .env.example           # Environment variable template
+└── README.md
+```
 
 ## Prerequisites
 
@@ -64,23 +72,23 @@ Ensure you have the required environment variables. We have provided template fi
 1. **Root Database Credentials:**
    Copy the root environment example:
    ```bash
-   cp meddrift-vqa-root/.env.example meddrift-vqa-root/.env
+   cp .env.example .env
    ```
-   *Edit meddrift-vqa-root/.env to configure your database & object storage passwords if you wish to change defaults.*
+   *Edit `.env` to configure your database & object storage passwords if you wish to change defaults.*
 
 2. **AI Service API Keys:**
    Copy the AI Service environment example:
    ```bash
-   cp meddrift-vqa-root/meddrift-ai-service/.env.example meddrift-vqa-root/meddrift-ai-service/.env
+   cp meddrift-ai-service/.env.example meddrift-ai-service/.env
    ```
-   *Edit meddrift-vqa-root/meddrift-ai-service/.env to insert your OPENROUTER_API_KEY, GEMINI_API_KEY, etc.*
+   *Edit `meddrift-ai-service/.env` to insert your OPENROUTER_API_KEY, GEMINI_API_KEY, etc.*
 
 ### 2. Prepare Reference Data
 Before running the system, you need the reference embeddings (which are too large to host on GitHub). We host these via Hugging Face.
 Run the provided script to download the datasets into the data/ folder:
 ```bash
 pip install huggingface_hub
-python meddrift-vqa-root/meddrift-ai-service/scripts/download_data.py
+python meddrift-ai-service/scripts/download_data.py
 ```
 
 
@@ -88,7 +96,6 @@ python meddrift-vqa-root/meddrift-ai-service/scripts/download_data.py
 Start all services in detached mode:
 
 ```bash
-cd meddrift-vqa-root
 docker-compose up -d --build
 ```
 

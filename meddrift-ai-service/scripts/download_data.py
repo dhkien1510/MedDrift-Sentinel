@@ -17,7 +17,7 @@ def main():
 
     parser.add_argument("--repo_id", type=str, default="dhkien23/meddrift_vqa", help="Hugging Face Dataset repo ID")
     
-    # Mặc định tải về meddrift-vqa-root/data
+    # Mặc định tải về project-root/data
     root_data_dir = Path(__file__).resolve().parent.parent.parent / "data"
     parser.add_argument("--local_dir", type=str, default=str(root_data_dir), help="Local directory to store data")
     
