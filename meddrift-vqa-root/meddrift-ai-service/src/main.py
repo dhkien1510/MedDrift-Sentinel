@@ -164,8 +164,9 @@ def _build_multimodal_scatter_2d(
         _logger.warning("_build_multimodal_scatter_2d: pca_pickle or joint_reference_npy not set")
         return []
 
-    # Resolve absolute path (config lưu path tương đối từ ROOT_DIR = /app hoặc /)
-    ROOT_DIR = "/"
+    # Resolve absolute path relative to the repo root
+    import pathlib
+    ROOT_DIR = str(pathlib.Path(__file__).resolve().parent.parent.parent)
     pca_abs  = pca_pickle_path  if os.path.isabs(pca_pickle_path)  else os.path.join(ROOT_DIR, pca_pickle_path)
     ref_abs  = joint_ref_path   if os.path.isabs(joint_ref_path)   else os.path.join(ROOT_DIR, joint_ref_path)
 
@@ -335,8 +336,9 @@ async def simulate_scenario(scenario_name: str, background_tasks: BackgroundTask
             safe_img_enc = cfg_image["encoder"].replace("/", "--")
             safe_txt_enc = cfg_text["encoder"].replace("/", "--")
 
-            img_path = f"/data/drift_scenarios/image/{safe_img_enc}/{scenario_name}.npy"
-            txt_path = f"/data/drift_scenarios/text/{safe_txt_enc}/{text_scenario}.npy"
+            base_data_dir = str(pathlib.Path(__file__).resolve().parent.parent.parent / "data")
+            img_path = f"{base_data_dir}/drift_scenarios/image/{safe_img_enc}/{scenario_name}.npy"
+            txt_path = f"{base_data_dir}/drift_scenarios/text/{safe_txt_enc}/{text_scenario}.npy"
 
             img_embs = np.load(img_path)
             txt_embs = np.load(txt_path)
@@ -452,8 +454,9 @@ async def get_drift_visualization(scenario: str = None):
             safe_img_enc = cfg_image["encoder"].replace("/", "--")
             safe_txt_enc = cfg_text["encoder"].replace("/", "--")
 
-            img_embs = np.load(f"/data/drift_scenarios/image/{safe_img_enc}/{scenario}.npy")[:200]
-            txt_embs = np.load(f"/data/drift_scenarios/text/{safe_txt_enc}/{text_scenario}.npy")[:200]
+            base_data_dir = str(pathlib.Path(__file__).resolve().parent.parent.parent / "data")
+            img_embs = np.load(f"{base_data_dir}/drift_scenarios/image/{safe_img_enc}/{scenario}.npy")[:200]
+            txt_embs = np.load(f"{base_data_dir}/drift_scenarios/text/{safe_txt_enc}/{text_scenario}.npy")[:200]
             image_data = extract_pca(True, img_embs)
             text_data  = extract_pca(False, txt_embs)
             multimodal_data = _build_multimodal_scatter_2d(img_embs, txt_embs, True)

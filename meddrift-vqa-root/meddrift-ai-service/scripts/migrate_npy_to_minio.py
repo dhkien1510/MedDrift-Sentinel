@@ -121,7 +121,7 @@ def main():
     print("  OK")
 
     # Migrate reference data
-    ref_dir =Path("/data") / "reference_data"
+    ref_dir = ROOT.parent / "data" / "reference_data"
     print(f"\n[2/4] Migrate reference embeddings từ {ref_dir} ...")
     if ref_dir.exists():
         ref_results = migrate_reference(ref_dir)
@@ -132,7 +132,7 @@ def main():
         print(f"  ⚠️  Thư mục không tồn tại: {ref_dir}")
 
     # Migrate scenarios
-    scenario_dir = Path("/data") / "drift_scenarios"
+    scenario_dir = ROOT.parent / "data" / "drift_scenarios"
     print(f"\n[3/4] Migrate scenario embeddings từ {scenario_dir} ...")
     if scenario_dir.exists():
         sc_results = migrate_scenarios(scenario_dir)

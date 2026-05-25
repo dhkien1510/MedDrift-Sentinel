@@ -117,7 +117,7 @@ def load_config_meta(isImage: bool) -> dict | None:
 
         REDIS_HOST     = os.getenv("REDIS_HOST",     "redis")
         REDIS_PORT     = int(os.getenv("REDIS_PORT", 6379))
-        REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", "meddrift123")
+        REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
 
         _r = _redis_sync.Redis(
             host=REDIS_HOST, port=REDIS_PORT, password=REDIS_PASSWORD,
