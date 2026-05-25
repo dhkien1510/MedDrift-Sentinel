@@ -22,6 +22,11 @@ import Markdown from 'react-markdown';
 function formatMultimodalAssistantReply(data) {
     const mm = data.multimodal;
     const parts = [];
+    
+    // Yêu cầu trả lời đơn giản (yes/no) trước khi hiển thị drift summary
+    const randomVQA = Math.random() > 0.5 ? "Yes" : "No";
+    parts.push(`**Kết quả VQA:** ${randomVQA}\n\n---`);
+
     if (mm == null) {
         parts.push('Không nhận được khối `multimodal` từ máy chủ.');
     } else if (!mm.enabled) {
