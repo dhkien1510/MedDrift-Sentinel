@@ -25,6 +25,7 @@ import io
 import yaml
 import logging
 import traceback
+import pathlib
 from datetime import datetime
 from fastapi import BackgroundTasks
 from bson import ObjectId
